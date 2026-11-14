@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Colander</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="dark-mode">
+  <div class="app-shell">
+    <!-- Top Bar -->
+    <header id="top-bar" class="top-bar">
+      <div class="top-bar-left">
+        <h1 class="project-title" id="project-title">COLANDER</h1>
+      </div>
+      <div class="top-bar-center">
+        <div id="badge-locked-constraints" class="badge-locked-constraints" style="display: none;">
+          <span class="badge-dot">●</span> LOCKED ROVER CONSTRAINTS: ACTIVE ON BOTH TERRAINS
+        </div>
+      </div>
+      <div class="top-bar-right">
+        <button type="button" id="btn-load-site" class="btn btn-secondary">Load Site</button>
+        <div class="toggle-group">
+          <label class="switch" for="toggle-compare-mode">
+            <input type="checkbox" id="toggle-compare-mode">
+            <span class="slider round"></span>
+          </label>
+          <span class="toggle-label">Compare Mode</span>
+        </div>
+        <button type="button" id="btn-run" class="btn btn-primary">Run Simulation</button>
+      </div>
+    </header>
+
+    <!-- Main Workspace (Sidebar + Map Area) -->
+    <div class="main-container">
+      <aside id="left-panel" class="left-panel">
+        <!-- 1. Load Data -->
+        <details class="panel-section" open>
+          <summary class="section-header">
+            <span class="section-title">1. Load Data</span>
+            <span class="chevron-icon">▾</span>
+          </summary>
+          <div class="section-content">
+            <label class="input-sublabel">Presets</label>
+            <div class="button-group preset-group">
+              <button type="button" class="btn btn-preset active" data-preset="Salar de Uyuni Rim" title="Salar de Uyuni Rim (Earth Analog)">Uyuni (Earth)</button>
+              <button type="button" class="btn btn-preset" data-preset="Mars - Jezero Crater" title="Mars - Jezero Crater (Target Site)">Jezero (Mars)</button>
+              <button type="button" class="btn btn-preset" data-preset="Moon - Shackleton" title="Moon - Shackleton (Lunar Target)">Moon</button>
+            </div>
+            <div class="file-upload-block">
+              <label class="input-sublabel" for="file-upload">Custom Data</label>
+              <label class="file-upload-dropzone" for="file-upload">
+                <span class="upload-btn-text">Choose File</span>
+                <span id="file-upload-name" class="file-name-text">No file chosen</span>
+                <input type="file" id="file-upload" class="file-input-hidden" accept=".json,.csv,.png,.jpg,.tif">
+              </label>
+            </div>
+          </div>
+        </details>
+
+        <!-- 2. Rover Specs -->
+        <details class="panel-section" open>
+          <summary class="section-header">
+            <span class="section-title">2. Rover Specs</span>
+            <span class="chevron-icon">▾</span>
+          </summary>
+          <div class="section-content">
+            <div class="control-row">
+              <div class="control-header">
+                <label for="slider-max-slope">Max Slope</label>
+                <span class="badge-value" id="val-max-slope">20°</span>
+              </div>
+              <input type="range" id="slider-max-slope" class="range-slider" min="5" max="45" step="1" value="20">
+            </div>
+
+            <div class="control-row">
+              <div class="control-header">
+                <label for="slider-energy-cost">Energy Cost</label>
+                <span class="badge-value" id="val-energy-cost">1.0x</span>
+              </div>
+              <input type="range" id="slider-energy-cost" class="range-slider" min="0.1" max="5.0" step="0.1" value="1.0">
+            </div>
+
+            <div class="control-row">
+              <div class="control-header">
+                <label for="slider-grip">Grip</label>
+                <span class="badge-value" id="val-grip">0.85</span>
+              </div>
+              <input type="range" id="slider-grip" class="range-slider" min="0.1" max="1.0" step="0.05" value="0.85">
+            </div>
+          </div>
+        </details>
+
+        <!-- 3. Mission Setup -->
+        <details class="panel-section" open>
+          <summary class="section-header">
+            <span class="section-title">3. Mission Setup</span>
+            <span class="chevron-icon">▾</span>
+          </summary>
+          <div class="section-content">
+            <label class="input-sublabel">Waypoints</label>
+            <div class="button-group mission-points-group">
+              <button type="button" id="btn-set-start" class="btn btn-secondary btn-point">Start</button>
+              <button type="button" id="btn-set-end" class="btn btn-secondary btn-point">End</button>
+            </div>
+
+            <div class="toggle-control-row">
+              <label class="switch" for="toggle-explore">
+                <input type="checkbox" id="toggle-explore">
+                <span class="slider round"></span>
+              </label>
+              <span class="toggle-text">Explore</span>
+            </div>
+          </div>
+        </details>
+
+        <!-- 4. Layers -->
+        <details class="panel-section" open>
+          <summary class="section-header">
+            <span class="section-title">4. Layers</span>
+            <span class="chevron-icon">▾</span>
+          </summary>
+          <div class="section-content layers-list">
+            <label class="layer-checkbox-item">
+              <input type="checkbox" id="layer-elevation" data-layer="elevation" checked>
+              <span class="custom-checkbox"></span>
+              <span class="layer-name">Elevation</span>
+            </label>
+
+            <label class="layer-checkbox-item">
+              <input type="checkbox" id="layer-slope" data-layer="slope" checked>
+              <span class="custom-checkbox"></span>
+              <span class="layer-name">Slope</span>
+            </label>
+
+            <label class="layer-checkbox-item">
+              <input type="checkbox" id="layer-energy-cost" data-layer="energyCost" checked>
+              <span class="custom-checkbox"></span>
+              <span class="layer-name">Energy Cost</span>
+            </label>
+
+            <label class="layer-checkbox-item">
+              <input type="checkbox" id="layer-hazards" data-layer="hazards" checked>
+              <span class="custom-checkbox"></span>
+              <span class="layer-name">Hazards</span>
+            </label>
+
+            <label class="layer-checkbox-item">
+              <input type="checkbox" id="layer-reachability" data-layer="reachability" checked>
+              <span class="custom-checkbox"></span>
+              <span class="layer-name">Reachability</span>
+            </label>
+          </div>
+        </details>
+      </aside>
+      <main id="map-workspace" class="map-workspace">
+        <!-- Split View Panes Container -->
+        <div class="split-view-container" id="split-view-container">
+          <!-- Left Map Column: Terrestrial Analog / Earth Site -->
+          <div class="map-pane map-pane-left" id="pane-earth">
+            <div class="map-pane-header" id="header-earth">
+              <span class="pane-tag tag-earth">TERRESTRIAL ANALOG // EARTH SITE (g = 9.81 m/s²)</span>
+            </div>
+            <div class="canvas-wrapper">
+              <canvas id="map-canvas-earth"></canvas>
+            </div>
+          </div>
+
+          <!-- Right Map Column: Target Environment / Moon or Mars Site -->
+          <div class="map-pane map-pane-right" id="pane-target" style="display: none;">
+            <div class="map-pane-header" id="header-target">
+              <span class="pane-tag tag-target" id="tag-target">TARGET ENVIRONMENT // MOON/MARS SITE (g = 3.72 / 1.62 m/s²)</span>
+            </div>
+            <div class="canvas-wrapper">
+              <canvas id="map-canvas-target"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- Floating HUD Overlay -->
+        <div class="map-hud" id="map-hud">
+          <!-- Dynamic Floating Legend Bar (Top-Left) -->
+          <div class="hud-card hud-legend-card" id="hud-legend-bar">
+            <div class="legend-header">
+              <span class="legend-title">ACTIVE LAYERS</span>
+              <span class="legend-badge" id="legend-layer-count">5 Active</span>
+            </div>
+            <div class="legend-items" id="legend-items-container">
+              <!-- Dynamically populated by updateLegendUI() -->
+            </div>
+          </div>
+
+          <!-- Navigation Controls Card -->
+          <div class="hud-card hud-controls-card">
+            <div class="hud-btn-group zoom-group">
+              <button type="button" id="btn-zoom-in" class="hud-btn" title="Zoom In">+</button>
+              <button type="button" id="btn-zoom-out" class="hud-btn" title="Zoom Out">−</button>
+              <button type="button" id="btn-zoom-reset" class="hud-btn" title="Reset View">Reset</button>
+            </div>
+            <div class="hud-pan-dpad">
+              <button type="button" id="btn-pan-up" class="hud-btn dpad-btn dpad-up" title="Pan Up">▲</button>
+              <div class="dpad-middle">
+                <button type="button" id="btn-pan-left" class="hud-btn dpad-btn dpad-left" title="Pan Left">◀</button>
+                <button type="button" id="btn-pan-center" class="hud-btn dpad-btn dpad-center" title="Center View">●</button>
+                <button type="button" id="btn-pan-right" class="hud-btn dpad-btn dpad-right" title="Pan Right">▶</button>
+              </div>
+              <button type="button" id="btn-pan-down" class="hud-btn dpad-btn dpad-down" title="Pan Down">▼</button>
+            </div>
+          </div>
+
+          <!-- Live Coordinates & Mission Status Badge -->
+          <div class="hud-card hud-coords-badge" id="hud-coords-badge">
+            <div class="hud-badge-section">
+              <span class="hud-lbl">Cell:</span>
+              <strong id="hud-cell-coord">--</strong>
+            </div>
+            <span class="hud-divider">|</span>
+            <div class="hud-badge-section">
+              <span class="hud-lbl">Elevation:</span>
+              <strong id="hud-cell-elev">--</strong>
+            </div>
+            <span class="hud-divider">|</span>
+            <div class="hud-badge-section">
+              <span class="hud-lbl">Mission:</span>
+              <span id="hud-mission-status" class="hud-mission-text">Click grid to set Start (A)</span>
+            </div>
+          </div>
+
+          <!-- Floating Hover Tooltip -->
+          <div id="map-hover-tooltip" class="map-tooltip" style="display: none;"></div>
+        </div>
+
+        <!-- Collapsible Telemetry Drawer / Summary Overlay -->
+        <div id="telemetry-summary" class="telemetry-summary collapsed">
+          <!-- Drawer Header Bar -->
+          <div class="telemetry-drawer-header" id="btn-toggle-telemetry">
+            <div class="drawer-header-left">
+              <span class="drawer-icon">📊</span>
+              <span class="drawer-title">MISSION TELEMETRY & SIMULATION SUMMARY</span>
+              <span class="drawer-badge" id="telemetry-run-status">READY TO RUN</span>
+            </div>
+            <div class="drawer-header-right">
+              <button type="button" class="drawer-btn-toggle" id="btn-drawer-collapse" title="Toggle Summary Drawer">
+                <span class="drawer-chevron" id="drawer-chevron">▲</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Drawer Body Content -->
+          <div class="telemetry-drawer-body">
+            <!-- 1. Detailed Stats Comparison Cards (4 Cards) -->
+            <div class="telemetry-stats-grid">
+              <!-- Card 1: Total Energy -->
+              <div class="telemetry-stat-card">
+                <div class="t-stat-label">Total Energy</div>
+                <div class="t-stat-value" id="t-stat-energy">-- J</div>
+                <div class="t-stat-sub" id="t-stat-energy-sub">Earth vs Target</div>
+              </div>
+
+              <!-- Card 2: Average Slope (°) -->
+              <div class="telemetry-stat-card">
+                <div class="t-stat-label">Average Slope</div>
+                <div class="t-stat-value" id="t-stat-avg-slope">--°</div>
+                <div class="t-stat-sub" id="t-stat-avg-slope-sub">Mean Gradient</div>
+              </div>
+
+              <!-- Card 3: Max Tilt Encountered (°) -->
+              <div class="telemetry-stat-card">
+                <div class="t-stat-label">Max Tilt Encountered</div>
+                <div class="t-stat-value" id="t-stat-max-tilt">--°</div>
+                <div class="t-stat-sub" id="t-stat-max-tilt-sub">Peak Pitch / Roll</div>
+              </div>
+
+              <!-- Card 4: % Terrain Reachable -->
+              <div class="telemetry-stat-card">
+                <div class="t-stat-label">% Terrain Reachable</div>
+                <div class="t-stat-value" id="t-stat-reachability">--%</div>
+                <div class="t-stat-sub" id="t-stat-reachability-sub">Non-Hazard Area</div>
+              </div>
+            </div>
+
+            <!-- 2. Bottom Row: Facts & Acts Log + Analog Viability Verdict Gauge -->
+            <div class="telemetry-details-row">
+              <!-- Left: Automated Engineering Facts & Acts Log -->
+              <div class="telemetry-log-panel">
+                <div class="telemetry-panel-title">
+                  <span>ENGINEERING FACTS & ACTS LOG</span>
+                  <span class="log-timestamp" id="log-timestamp">LIVE TELEMETRY</span>
+                </div>
+                <div class="engineering-log-box" id="engineering-log">
+                  Click "Run Simulation" in the top bar to calculate path traversal, slip friction, and planetary analog viability.
+                </div>
+              </div>
+
+              <!-- Right: Analog Viability Verdict Gauge -->
+              <div class="telemetry-verdict-panel" id="telemetry-verdict-panel">
+                <div class="telemetry-panel-title">
+                  <span>ANALOG VIABILITY VERDICT</span>
+                  <span class="verdict-mode-tag" id="verdict-mode-tag">COMPARE MODE</span>
+                </div>
+                <div class="verdict-content">
+                  <div class="verdict-gauge-wrapper">
+                    <div class="verdict-score-display">
+                      <span class="verdict-percent" id="verdict-score-pct">--%</span>
+                      <span class="verdict-score-lbl">SIMILARITY</span>
+                    </div>
+                    <div class="verdict-meter-track">
+                      <div class="verdict-meter-fill" id="verdict-meter-fill" style="width: 0%;"></div>
+                    </div>
+                  </div>
+                  <div class="verdict-badge-box">
+                    <span class="verdict-badge verdict-pending" id="verdict-status-badge">AWAITING RUN</span>
+                    <div class="verdict-desc" id="verdict-desc">Run comparison simulation to evaluate terrestrial analog match.</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <!-- Bottom Metrics Bar -->
+    <footer id="bottom-bar" class="bottom-bar">
+      <div class="metrics-container">
+        <!-- 1. Energy Used -->
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-icon">⚡</span>
+            <span class="metric-label">Energy Used</span>
+          </div>
+          <span class="metric-value" id="stat-energy">-- J</span>
+        </div>
+
+        <!-- 2. Hazards Avoided -->
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-icon">⚠️</span>
+            <span class="metric-label">Hazards Avoided</span>
+          </div>
+          <span class="metric-value" id="stat-hazards">--</span>
+        </div>
+
+        <!-- 3. Path Length -->
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-icon">📏</span>
+            <span class="metric-label">Path Length</span>
+          </div>
+          <span class="metric-value" id="stat-length">-- m</span>
+        </div>
+
+        <!-- 4. Analog Similarity Score -->
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-icon">🔄</span>
+            <span class="metric-label">Analog Similarity Score</span>
+          </div>
+          <span class="metric-value" id="stat-similarity">--%</span>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <script src="simulation_engine.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
