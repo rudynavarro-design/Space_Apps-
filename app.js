@@ -3,11 +3,6 @@
  */
 
 // Grid Configuration
-const CELL_PIXELS = 16;        // Base cell dimension in pixels
-const WORLD_WIDTH = GRID_SIZE * CELL_PIXELS;
-const WORLD_HEIGHT = GRID_SIZE * CELL_PIXELS;
-const CELL_WORLD_METERS = 1.0; // 1 meter resolution per grid cell
-
 // Initialize AppState with facts, config, layerToggles, acts, stats, and compareMode
 const AppState = {
   compareMode: false,
