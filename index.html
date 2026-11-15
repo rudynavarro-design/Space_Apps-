@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Colander</title>
+  <title>Planetary Terrain Mapping</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body class="dark-mode">
@@ -11,7 +11,7 @@
     <!-- Top Bar -->
     <header id="top-bar" class="top-bar">
       <div class="top-bar-left">
-        <h1 class="project-title" id="project-title">COLANDER</h1>
+        <h1 class="project-title" id="project-title">PLANETARY TERRAIN MAPPING</h1>
       </div>
       <div class="top-bar-center">
         <div id="badge-locked-constraints" class="badge-locked-constraints" style="display: none;">
@@ -48,11 +48,11 @@
               <button type="button" class="btn btn-preset" data-preset="Moon - Shackleton" title="Moon - Shackleton (Lunar Target)">Moon</button>
             </div>
             <div class="file-upload-block">
-              <label class="input-sublabel" for="file-upload">Custom Data</label>
+              <label class="input-sublabel" for="file-upload">Custom Data (.json / .csv)</label>
               <label class="file-upload-dropzone" for="file-upload">
                 <span class="upload-btn-text">Choose File</span>
                 <span id="file-upload-name" class="file-name-text">No file chosen</span>
-                <input type="file" id="file-upload" class="file-input-hidden" accept=".json,.csv,.png,.jpg,.tif">
+                <input type="file" id="file-upload" class="file-input-hidden" accept=".json,.csv,.txt">
               </label>
             </div>
           </div>
@@ -153,13 +153,14 @@
           </div>
         </details>
       </aside>
+
       <main id="map-workspace" class="map-workspace">
         <!-- Split View Panes Container -->
         <div class="split-view-container" id="split-view-container">
           <!-- Left Map Column: Terrestrial Analog / Earth Site -->
           <div class="map-pane map-pane-left" id="pane-earth">
             <div class="map-pane-header" id="header-earth">
-              <span class="pane-tag tag-earth">TERRESTRIAL ANALOG // EARTH SITE (g = 9.81 m/s²)</span>
+              <span class="pane-tag tag-earth" id="tag-earth">TERRESTRIAL ANALOG // SALAR DE UYUNI (g = 9.81 m/s²)</span>
             </div>
             <div class="canvas-wrapper">
               <canvas id="map-canvas-earth"></canvas>
@@ -169,7 +170,7 @@
           <!-- Right Map Column: Target Environment / Moon or Mars Site -->
           <div class="map-pane map-pane-right" id="pane-target" style="display: none;">
             <div class="map-pane-header" id="header-target">
-              <span class="pane-tag tag-target" id="tag-target">TARGET ENVIRONMENT // MOON/MARS SITE (g = 3.72 / 1.62 m/s²)</span>
+              <span class="pane-tag tag-target" id="tag-target">TARGET ENVIRONMENT // MARS - JEZERO CRATER (g = 3.72 m/s²)</span>
             </div>
             <div class="canvas-wrapper">
               <canvas id="map-canvas-target"></canvas>
@@ -185,9 +186,7 @@
               <span class="legend-title">ACTIVE LAYERS</span>
               <span class="legend-badge" id="legend-layer-count">5 Active</span>
             </div>
-            <div class="legend-items" id="legend-items-container">
-              <!-- Dynamically populated by updateLegendUI() -->
-            </div>
+            <div class="legend-items" id="legend-items-container"></div>
           </div>
 
           <!-- Navigation Controls Card -->
@@ -232,7 +231,6 @@
 
         <!-- Collapsible Telemetry Drawer / Summary Overlay -->
         <div id="telemetry-summary" class="telemetry-summary collapsed">
-          <!-- Drawer Header Bar -->
           <div class="telemetry-drawer-header" id="btn-toggle-telemetry">
             <div class="drawer-header-left">
               <span class="drawer-icon">📊</span>
@@ -246,32 +244,26 @@
             </div>
           </div>
 
-          <!-- Drawer Body Content -->
           <div class="telemetry-drawer-body">
-            <!-- 1. Detailed Stats Comparison Cards (4 Cards) -->
             <div class="telemetry-stats-grid">
-              <!-- Card 1: Total Energy -->
               <div class="telemetry-stat-card">
                 <div class="t-stat-label">Total Energy</div>
                 <div class="t-stat-value" id="t-stat-energy">-- J</div>
                 <div class="t-stat-sub" id="t-stat-energy-sub">Earth vs Target</div>
               </div>
 
-              <!-- Card 2: Average Slope (°) -->
               <div class="telemetry-stat-card">
                 <div class="t-stat-label">Average Slope</div>
                 <div class="t-stat-value" id="t-stat-avg-slope">--°</div>
                 <div class="t-stat-sub" id="t-stat-avg-slope-sub">Mean Gradient</div>
               </div>
 
-              <!-- Card 3: Max Tilt Encountered (°) -->
               <div class="telemetry-stat-card">
                 <div class="t-stat-label">Max Tilt Encountered</div>
                 <div class="t-stat-value" id="t-stat-max-tilt">--°</div>
                 <div class="t-stat-sub" id="t-stat-max-tilt-sub">Peak Pitch / Roll</div>
               </div>
 
-              <!-- Card 4: % Terrain Reachable -->
               <div class="telemetry-stat-card">
                 <div class="t-stat-label">% Terrain Reachable</div>
                 <div class="t-stat-value" id="t-stat-reachability">--%</div>
@@ -279,9 +271,7 @@
               </div>
             </div>
 
-            <!-- 2. Bottom Row: Facts & Acts Log + Analog Viability Verdict Gauge -->
             <div class="telemetry-details-row">
-              <!-- Left: Automated Engineering Facts & Acts Log -->
               <div class="telemetry-log-panel">
                 <div class="telemetry-panel-title">
                   <span>ENGINEERING FACTS & ACTS LOG</span>
@@ -292,7 +282,6 @@
                 </div>
               </div>
 
-              <!-- Right: Analog Viability Verdict Gauge -->
               <div class="telemetry-verdict-panel" id="telemetry-verdict-panel">
                 <div class="telemetry-panel-title">
                   <span>ANALOG VIABILITY VERDICT</span>
@@ -323,7 +312,6 @@
     <!-- Bottom Metrics Bar -->
     <footer id="bottom-bar" class="bottom-bar">
       <div class="metrics-container">
-        <!-- 1. Energy Used -->
         <div class="metric-card">
           <div class="metric-header">
             <span class="metric-icon">⚡</span>
@@ -332,7 +320,6 @@
           <span class="metric-value" id="stat-energy">-- J</span>
         </div>
 
-        <!-- 2. Hazards Avoided -->
         <div class="metric-card">
           <div class="metric-header">
             <span class="metric-icon">⚠️</span>
@@ -341,7 +328,6 @@
           <span class="metric-value" id="stat-hazards">--</span>
         </div>
 
-        <!-- 3. Path Length -->
         <div class="metric-card">
           <div class="metric-header">
             <span class="metric-icon">📏</span>
@@ -350,23 +336,6 @@
           <span class="metric-value" id="stat-length">-- m</span>
         </div>
 
-        <!-- 4. Analog Similarity Score -->
-        <div class="metric-card">
-          <div class="metric-header">
-            <span class="metric-icon">🔄</span>
-            <span class="metric-label">Analog Similarity Score</span>
-          </div>
-          <span class="metric-value" id="stat-similarity">--%</span>
-        </div>
-      </div>
-    </footer>
-  </div>
-
-  <script src="simulation_engine.js"></script>
-  <script src="app.js"></script>
-</body>
-</html>
-        <!-- 4. Analog Similarity Score -->
         <div class="metric-card">
           <div class="metric-header">
             <span class="metric-icon">🔄</span>

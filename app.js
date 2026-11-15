@@ -1,14 +1,13 @@
 /**
- * Colander - Batches 1 - 7: Complete Pipeline with Simulation, Telemetry Drawer & Viability Verdict
+ * Planetary Terrain Mapping - Complete UI, Simultaneous Rover Renderer & Telemetry Pipeline
+ * app.js
  */
 
-// Grid Configuration
-// Initialize AppState with facts, config, layerToggles, acts, stats, and compareMode
 const AppState = {
   compareMode: false,
   facts: {
-    preset: 'Earth',
-    site: 'Earth',
+    preset: 'Salar de Uyuni Rim',
+    site: 'Salar de Uyuni Rim',
     uploadedFile: null,
     roverSpecs: {
       maxSlope: 20,
@@ -19,24 +18,24 @@ const AppState = {
     energyCost: 1.0,
     grip: 0.85,
     missionSetup: {
-      selectedPointMode: null, // 'start' | 'end' | null
+      selectedPointMode: null,
       explore: false,
       startPoint: null,
       endPoint: null
     },
     explore: false,
-    heightmap: null,           // 60x60 Earth elevation grid (0m - 100m)
+    heightmap: null,
     elevationGrid: null,
     minElevation: 0,
     maxElevation: 100,
-    targetHeightmap: null,     // 60x60 Moon/Mars elevation grid (0m - 100m)
+    targetHeightmap: null,
     targetMinElevation: 0,
     targetMaxElevation: 100
   },
   config: {
     mission: {
-      start: null,             // { x, y, z }
-      end: null                // { x, y, z }
+      start: null,
+      end: null
     },
     rover: {
       maxSlopeDeg: 20,
@@ -52,14 +51,14 @@ const AppState = {
     reachability: true
   },
   acts: {
-    path: null,                // Earth A* Path
-    targetPath: null,          // Target A* Path
+    path: null,
+    earthPath: null,
+    targetPath: null,
     summaryLog: '',
     verdict: null
   }
 };
 
-// Make AppState.stats reactive so changing properties auto-refreshes the metrics UI
 function makeStatsReactive(initialStats = {}) {
   return new Proxy(initialStats, {
     set(target, prop, value) {
@@ -85,10 +84,8 @@ Object.defineProperty(AppState, 'stats', {
   configurable: true
 });
 
-// Expose AppState globally for debugging and test suites
 window.AppState = AppState;
 
-// Shared Canvas & Viewport State (Synchronized across both maps in Compare Mode)
 const ViewState = {
   zoom: 1.0,
   minZoom: 0.3,
@@ -99,111 +96,61 @@ const ViewState = {
   dragStartX: 0,
   dragStartY: 0,
   hasDragged: false,
-  hoveredCell: null            // { x, y, z, isTarget } | null
+  hoveredCell: null
 };
 
-document.addEventListener('DOMContentLoaded', () => {
-  if (typeof sieveFacts === 'function') {
-    sieveFacts('Salar de Uyuni Rim');
-  } else {
-    generateProceduralElevationHeightmaps();
+// Rover simultaneous traversal animation state
+const RoverAnimState = {
+  progress: 1.0,
+  isAnimating: false,
+  rafId: null
+};
+
+function startRoverAnimation() {
+  if (RoverAnimState.rafId) {
+    cancelAnimationFrame(RoverAnimState.rafId);
   }
+  RoverAnimState.progress = 0.0;
+  RoverAnimState.isAnimating = true;
+  const durationMs = 2200;
+  const startTime = performance.now();
+
+  function step(now) {
+    const elapsed = now - startTime;
+    RoverAnimState.progress = Math.min(1.0, elapsed / durationMs);
+    if (typeof window.renderAllMaps === 'function') {
+      window.renderAllMaps();
+    }
+    if (RoverAnimState.progress < 1.0) {
+      RoverAnimState.rafId = requestAnimationFrame(step);
+    } else {
+      RoverAnimState.isAnimating = false;
+      RoverAnimState.rafId = null;
+    }
+  }
+
+  RoverAnimState.rafId = requestAnimationFrame(step);
+}
+window.startRoverAnimation = startRoverAnimation;
+
+document.addEventListener('DOMContentLoaded', () => {
   initLeftPanelControls();
   initCompareModeToggle();
   initMapCanvases();
   initDrawerControls();
+
+  if (typeof sieveFacts === 'function') {
+    sieveFacts('Salar de Uyuni Rim');
+  }
+  if (typeof window.resizeAllCanvases === 'function') {
+    window.resizeAllCanvases();
+  }
   updateMetricsUI();
   updateLegendUI();
 });
 
-/**
- * -------------------------------------------------------------
- * 1. Procedural Heightmap Generation (0m to 100m Scale)
- * -------------------------------------------------------------
- */
-function generateProceduralElevationHeightmaps() {
-  const earthGrid = [];
-  const targetGrid = [];
-
-  let rawMinE = Infinity, rawMaxE = -Infinity;
-  let rawMinT = Infinity, rawMaxT = -Infinity;
-
-  const rawEarth = [];
-  const rawTarget = [];
-
-  for (let y = 0; y < GRID_SIZE; y++) {
-    const rowE = [];
-    const rowT = [];
-    for (let x = 0; x < GRID_SIZE; x++) {
-      const nx = x / GRID_SIZE;
-      const ny = y / GRID_SIZE;
-
-      // Earth Raw Synthesis
-      const w1 = Math.sin(nx * Math.PI * 3.5) * Math.cos(ny * Math.PI * 3.5) * 320;
-      const w2 = Math.sin((nx + ny) * Math.PI * 6.0) * 140;
-      const w3 = Math.cos((nx - ny) * Math.PI * 8.0) * 75;
-      const craterE = Math.exp(-Math.hypot(nx - 0.5, ny - 0.5) * 9.0) * -180;
-      const ridgeE = Math.abs(Math.sin((nx * 2 + ny * 3) * Math.PI * 2.0)) * 120;
-      const valE = 500 + w1 + w2 + w3 + craterE + ridgeE;
-      if (valE < rawMinE) rawMinE = valE;
-      if (valE > rawMaxE) rawMaxE = valE;
-      rowE.push(valE);
-
-      // Target Raw Synthesis (Moon/Mars Cratering)
-      const c1 = Math.exp(-Math.hypot(nx - 0.3, ny - 0.38) * 11.0) * -280;
-      const c2 = Math.exp(-Math.hypot(nx - 0.72, ny - 0.68) * 14.0) * -320;
-      const c3 = Math.exp(-Math.hypot(nx - 0.62, ny - 0.22) * 16.0) * -210;
-      const dunes = Math.sin(nx * Math.PI * 12.0) * 55 + Math.cos(ny * Math.PI * 8.0) * 45;
-      const volcano = Math.exp(-Math.hypot(nx - 0.82, ny - 0.42) * 7.5) * 420;
-      const valT = 450 + c1 + c2 + c3 + dunes + volcano;
-      if (valT < rawMinT) rawMinT = valT;
-      if (valT > rawMaxT) rawMaxT = valT;
-      rowT.push(valT);
-    }
-    rawEarth.push(rowE);
-    rawTarget.push(rowT);
-  }
-
-  // Normalize into [0m .. 100m] elevation range
-  const rangeE = (rawMaxE - rawMinE) || 1;
-  const rangeT = (rawMaxT - rawMinT) || 1;
-
-  for (let y = 0; y < GRID_SIZE; y++) {
-    const rowE = [];
-    const rowT = [];
-    for (let x = 0; x < GRID_SIZE; x++) {
-      const eNorm = Math.max(0, Math.min(100, Math.round(((rawEarth[y][x] - rawMinE) / rangeE) * 100 * 10) / 10));
-      const tNorm = Math.max(0, Math.min(100, Math.round(((rawTarget[y][x] - rawMinT) / rangeT) * 100 * 10) / 10));
-      rowE.push(eNorm);
-      rowT.push(tNorm);
-    }
-    earthGrid.push(rowE);
-    targetGrid.push(rowT);
-  }
-
-  AppState.facts.heightmap = earthGrid;
-  AppState.facts.elevationGrid = earthGrid;
-  AppState.facts.minElevation = 0;
-  AppState.facts.maxElevation = 100;
-
-  AppState.facts.targetHeightmap = targetGrid;
-  AppState.facts.targetMinElevation = 0;
-  AppState.facts.targetMaxElevation = 100;
-
-  console.log(`[Colander] Heightmaps initialized to [0m .. 100m] scale.`);
-}
-
-/**
- * -------------------------------------------------------------
- * Terrain Geometry & Hazard Helpers
- * -------------------------------------------------------------
- */
-
-// Cell-to-cell slope calculation in degrees using 8 immediate neighbors or cached matrix
 function computeSlopeDegrees(grid, x, y) {
   if (!grid) return 0;
-
-  // Use precomputed 8-neighbor slope matrix when available
   if (grid === AppState.facts.earthGrid && AppState.facts.earthSlopeGrid) {
     return AppState.facts.earthSlopeGrid[y][x];
   }
@@ -214,7 +161,6 @@ function computeSlopeDegrees(grid, x, y) {
     return AppState.facts.slopeGrid[y][x];
   }
 
-  // 8-neighbor fallback
   const zCenter = grid[y][x];
   let maxGrad = 0.0;
   const dirs = [
@@ -233,7 +179,6 @@ function computeSlopeDegrees(grid, x, y) {
   return Math.atan(maxGrad) * (180.0 / Math.PI);
 }
 
-// Maximum step height difference relative to immediate neighbors (in meters)
 function computeMaxStepHeight(grid, x, y) {
   if (!grid) return 0;
   const z = grid[y][x];
@@ -244,138 +189,66 @@ function computeMaxStepHeight(grid, x, y) {
   return Math.max(Math.abs(z - zU), Math.abs(z - zD), Math.abs(z - zL), Math.abs(z - zR));
 }
 
-// Hazard evaluation: slope > maxSlopeDeg OR step height > 0.3m
 function isCellHazard(grid, x, y, maxSlopeDeg) {
   const slope = computeSlopeDegrees(grid, x, y);
   const step = computeMaxStepHeight(grid, x, y);
   return slope > maxSlopeDeg || step > 0.3;
 }
 
-// Breadth-First-Search (BFS) flood-fill to find reachable cells from Start (A)
-function computeReachableMap(grid, startX, startY, maxSlopeDeg) {
-  const reachable = Array.from({ length: GRID_SIZE }, () => new Uint8Array(GRID_SIZE));
-  if (startX == null || startY == null || isCellHazard(grid, startX, startY, maxSlopeDeg)) {
-    return reachable;
-  }
+/**
+ * Parse uploaded .json or .csv custom terrain files into a 60x60 elevation grid
+ */
+function parseUploadedTerrainFile(file) {
+  const reader = new FileReader();
+  reader.onload = (event) => {
+    try {
+      const text = event.target.result.trim();
+      let raw2D = null;
 
-  const queue = [[startX, startY]];
-  reachable[startY][startX] = 1;
-  let head = 0;
-
-  const dirs = [
-    [1, 0], [-1, 0], [0, 1], [0, -1],
-    [1, 1], [1, -1], [-1, 1], [-1, -1]
-  ];
-
-  while (head < queue.length) {
-    const [cx, cy] = queue[head++];
-    for (const [dx, dy] of dirs) {
-      const nx = cx + dx;
-      const ny = cy + dy;
-      if (nx >= 0 && nx < GRID_SIZE && ny >= 0 && ny < GRID_SIZE && !reachable[ny][nx]) {
-        if (!isCellHazard(grid, nx, ny, maxSlopeDeg)) {
-          reachable[ny][nx] = 1;
-          queue.push([nx, ny]);
-        }
+      if (file.name.endsWith('.json') || text.startsWith('[') || text.startsWith('{')) {
+        const parsed = JSON.parse(text);
+        raw2D = Array.isArray(parsed) ? parsed : (parsed.grid || parsed.elevation || parsed.data);
+      } else {
+        // Parse CSV rows
+        raw2D = text.split(/\r?\n/).filter(line => line.trim().length > 0).map(line =>
+          line.split(/[,\s;]+/).map(Number).filter(n => !isNaN(n))
+        ).filter(row => row.length > 0);
       }
+
+      const normalizedGrid = window.normalizeCustomGridTo60x60 ? window.normalizeCustomGridTo60x60(raw2D) : null;
+      if (normalizedGrid) {
+        const slopeGrid = window.calculateSlopeMatrix(normalizedGrid);
+        // Apply uploaded grid to active target or Earth grid
+        if (AppState.compareMode) {
+          AppState.facts.targetGrid = normalizedGrid;
+          AppState.facts.targetHeightmap = normalizedGrid;
+          AppState.facts.targetSlopeGrid = slopeGrid;
+        } else {
+          AppState.facts.earthGrid = normalizedGrid;
+          AppState.facts.heightmap = normalizedGrid;
+          AppState.facts.elevationGrid = normalizedGrid;
+          AppState.facts.slopeGrid = slopeGrid;
+          AppState.facts.earthSlopeGrid = slopeGrid;
+        }
+        window.sieveActs(AppState.facts, AppState.config.rover, AppState.config.mission.start, AppState.config.mission.end);
+        if (window.renderAllMaps) window.renderAllMaps();
+      }
+    } catch (err) {
+      console.error('[Planetary Terrain Mapping] Failed to parse custom data file:', err);
     }
-  }
-  return reachable;
+  };
+  reader.readAsText(file);
 }
 
-/**
- * -------------------------------------------------------------
- * A* Pathfinding Solver
- * -------------------------------------------------------------
- */
-function solvePathAStar(grid, start, end, maxSlopeDeg) {
-  if (!start || !end || !grid) return [];
-
-  const startNode = { x: start.x, y: start.y, g: 0, h: Math.hypot(end.x - start.x, end.y - start.y), parent: null };
-  const openSet = [startNode];
-  const closedSet = new Uint8Array(GRID_SIZE * GRID_SIZE);
-  const bestG = new Float32Array(GRID_SIZE * GRID_SIZE).fill(Infinity);
-  bestG[start.y * GRID_SIZE + start.x] = 0;
-
-  const dirs = [
-    [1, 0, 1.0], [-1, 0, 1.0], [0, 1, 1.0], [0, -1, 1.0],
-    [1, 1, 1.414], [1, -1, 1.414], [-1, 1, 1.414], [-1, -1, 1.414]
-  ];
-
-  let iterations = 0;
-  const maxIterations = 8000;
-  let closestNode = startNode;
-  let minH = startNode.h;
-
-  while (openSet.length > 0 && iterations++ < maxIterations) {
-    let bestIdx = 0;
-    let bestF = openSet[0].g + openSet[0].h;
-    for (let i = 1; i < openSet.length; i++) {
-      const f = openSet[i].g + openSet[i].h;
-      if (f < bestF) {
-        bestF = f;
-        bestIdx = i;
-      }
-    }
-
-    const current = openSet.splice(bestIdx, 1)[0];
-    const curIdx = current.y * GRID_SIZE + current.x;
-
-    if (current.x === end.x && current.y === end.y) {
-      closestNode = current;
-      break;
-    }
-
-    closedSet[curIdx] = 1;
-
-    for (const [dx, dy, dist] of dirs) {
-      const nx = current.x + dx;
-      const ny = current.y + dy;
-
-      if (nx < 0 || nx >= GRID_SIZE || ny < 0 || ny >= GRID_SIZE) continue;
-      const nIdx = ny * GRID_SIZE + nx;
-      if (closedSet[nIdx]) continue;
-
-      const isHazard = isCellHazard(grid, nx, ny, maxSlopeDeg);
-      if (isHazard && !(nx === end.x && ny === end.y)) continue;
-
-      const slope = computeSlopeDegrees(grid, nx, ny);
-      const slopePenalty = 1.0 + Math.pow(slope / 14.0, 1.8);
-      const tentativeG = current.g + dist * slopePenalty;
-
-      if (tentativeG < bestG[nIdx]) {
-        bestG[nIdx] = tentativeG;
-        const h = Math.hypot(end.x - nx, end.y - ny);
-        const neighbor = { x: nx, y: ny, g: tentativeG, h, parent: current };
-        openSet.push(neighbor);
-
-        if (h < minH) {
-          minH = h;
-          closestNode = neighbor;
-        }
-      }
-    }
-  }
-
-  const path = [];
-  let curr = closestNode;
-  while (curr) {
-    const z = grid[curr.y] ? grid[curr.y][curr.x] : 0;
-    path.unshift({ x: curr.x, y: curr.y, z });
-    curr = curr.parent;
-  }
-  return path;
-}
-
-/**
- * -------------------------------------------------------------
- * 2. Left Panel Control Handlers
- * -------------------------------------------------------------
- */
 function initLeftPanelControls() {
   const presetButtons = document.querySelectorAll('.btn-preset');
   const fileInput = document.getElementById('file-upload');
   const fileNameDisplay = document.getElementById('file-upload-name');
+  const btnLoadSite = document.getElementById('btn-load-site');
+
+  if (btnLoadSite && fileInput) {
+    btnLoadSite.addEventListener('click', () => fileInput.click());
+  }
 
   presetButtons.forEach(btn => {
     btn.addEventListener('click', () => {
@@ -388,14 +261,9 @@ function initLeftPanelControls() {
 
       if (typeof sieveFacts === 'function') {
         sieveFacts(preset);
-      } else {
-        AppState.facts.preset = preset;
-        AppState.facts.site = preset;
-        updateTargetEnvironmentLabel();
-        generateProceduralElevationHeightmaps();
-        if (window.renderAllMaps) window.renderAllMaps();
       }
-      console.log(`[AppState.facts] Preset selected via sieveFacts: ${preset}`);
+      updateTargetEnvironmentLabel();
+      if (window.renderAllMaps) window.renderAllMaps();
     });
   });
 
@@ -412,13 +280,13 @@ function initLeftPanelControls() {
           type: file.type
         };
         AppState.facts.preset = 'Custom';
-        AppState.facts.site = 'Custom';
+        AppState.facts.site = file.name;
         updateTargetEnvironmentLabel();
+        parseUploadedTerrainFile(file);
       }
     });
   }
 
-  // Rover Specs Sliders
   const setupSlider = (sliderId, badgeId, factKey, unit, decimals = 0) => {
     const slider = document.getElementById(sliderId);
     const badge = document.getElementById(badgeId);
@@ -453,7 +321,6 @@ function initLeftPanelControls() {
   setupSlider('slider-energy-cost', 'val-energy-cost', 'energyCost', 'x', 1);
   setupSlider('slider-grip', 'val-grip', 'grip', '', 2);
 
-  // Mission Setup Start / End Buttons & Explore
   const btnSetStart = document.getElementById('btn-set-start');
   const btnSetEnd = document.getElementById('btn-set-end');
   const toggleExplore = document.getElementById('toggle-explore');
@@ -482,7 +349,6 @@ function initLeftPanelControls() {
     });
   }
 
-  // Layers Checkboxes
   const layerCheckboxes = document.querySelectorAll('.layer-checkbox-item input[type="checkbox"]');
   layerCheckboxes.forEach(checkbox => {
     checkbox.addEventListener('change', (e) => {
@@ -497,23 +363,23 @@ function initLeftPanelControls() {
 }
 
 function updateTargetEnvironmentLabel() {
-  const tag = document.getElementById('tag-target');
-  if (!tag) return;
-  const site = AppState.facts.site || 'Mars';
+  const tagTarget = document.getElementById('tag-target');
+  const tagEarth = document.getElementById('tag-earth');
+  const site = AppState.facts.site || 'Mars - Jezero Crater';
+
+  if (tagEarth) {
+    tagEarth.textContent = 'TERRESTRIAL ANALOG // SALAR DE UYUNI (g = 9.81 m/s²)';
+  }
+  if (!tagTarget) return;
+
   if (site.includes('Moon') || site.includes('Shackleton')) {
-    tag.textContent = 'TARGET ENVIRONMENT // MOON SITE (g = 1.62 m/s²)';
-  } else if (site.includes('Mars') || site.includes('Jezero')) {
-    tag.textContent = 'TARGET ENVIRONMENT // MARS - JEZERO CRATER (g = 3.72 m/s²)';
+    tagTarget.textContent = 'TARGET ENVIRONMENT // MOON - SHACKLETON CRATER (g = 1.62 m/s²)';
   } else {
-    tag.textContent = 'TARGET ENVIRONMENT // MOON/MARS SITE (g = 3.72 / 1.62 m/s²)';
+    tagTarget.textContent = 'TARGET ENVIRONMENT // MARS - JEZERO CRATER (g = 3.72 m/s²)';
   }
 }
+window.updateTargetEnvironmentLabel = updateTargetEnvironmentLabel;
 
-/**
- * -------------------------------------------------------------
- * 3. Dynamic Floating Legend Bar
- * -------------------------------------------------------------
- */
 function updateLegendUI() {
   const container = document.getElementById('legend-items-container');
   const countBadge = document.getElementById('legend-layer-count');
@@ -568,7 +434,7 @@ function updateLegendUI() {
     html += `
       <div class="legend-swatch-item">
         <span class="legend-swatch swatch-hazards"></span>
-        <span>Hazards (> ${maxSlope}° / Step > 0.3m)</span>
+        <span>Hazards (> ${maxSlope}° / Slip)</span>
       </div>
     `;
   }
@@ -594,11 +460,6 @@ function updateLegendUI() {
   }
 }
 
-/**
- * -------------------------------------------------------------
- * 4. Compare Mode Toggle
- * -------------------------------------------------------------
- */
 function initCompareModeToggle() {
   const toggleCompare = document.getElementById('toggle-compare-mode');
   const badgeLocked = document.getElementById('badge-locked-constraints');
@@ -622,10 +483,11 @@ function initCompareModeToggle() {
       if (paneTarget) paneTarget.style.display = 'none';
     }
 
+    ViewState.panX = 0;
+    ViewState.panY = 0;
     if (window.resizeAllCanvases) window.resizeAllCanvases();
     updateMetricsUI();
     updateLegendUI();
-    console.log(`[Compare Mode] Active: ${active}`);
   }
 
   if (toggleCompare) {
@@ -637,11 +499,13 @@ function initCompareModeToggle() {
   window.setCompareMode = setCompareMode;
 }
 
-/**
- * -------------------------------------------------------------
- * 5. Interactive Map Canvases (Rendering Pipeline)
- * -------------------------------------------------------------
- */
+function isSingleViewTargetSelected() {
+  return !AppState.compareMode && (
+    AppState.facts.preset === 'Mars - Jezero Crater' ||
+    AppState.facts.preset === 'Moon - Shackleton'
+  );
+}
+
 function initMapCanvases() {
   const canvasEarth = document.getElementById('map-canvas-earth');
   const canvasTarget = document.getElementById('map-canvas-target');
@@ -658,7 +522,6 @@ function initMapCanvases() {
   function resizeCanvases() {
     const dpr = window.devicePixelRatio || 1;
 
-    // Resize Earth Canvas
     const wrapEarth = paneEarth.querySelector('.canvas-wrapper') || paneEarth;
     const rectEarth = wrapEarth.getBoundingClientRect();
     if (rectEarth.width > 0 && rectEarth.height > 0) {
@@ -668,7 +531,6 @@ function initMapCanvases() {
       ctxEarth.scale(dpr, dpr);
     }
 
-    // Resize Target Canvas
     if (AppState.compareMode && canvasTarget && paneTarget) {
       const wrapTarget = paneTarget.querySelector('.canvas-wrapper') || paneTarget;
       const rectTarget = wrapTarget.getBoundingClientRect();
@@ -705,12 +567,8 @@ function initMapCanvases() {
 
   window.addEventListener('resize', resizeCanvases);
   window.resizeAllCanvases = resizeCanvases;
-  resizeCanvases();
 
-  // -----------------------------------------------------------
-  // Canvas Render Loop with Layer Pipeline
-  // -----------------------------------------------------------
-  function renderCanvasInstance(ctx, canvas, grid) {
+  function renderCanvasInstance(ctx, canvas, grid, isTargetMap) {
     if (!ctx || !canvas || !grid) return;
 
     const dpr = window.devicePixelRatio || 1;
@@ -722,40 +580,29 @@ function initMapCanvases() {
     ctx.translate(ViewState.panX, ViewState.panY);
     ctx.scale(ViewState.zoom, ViewState.zoom);
 
-    // PASS 1: Base Terrain (Elevation Grayscale)
     renderTerrainBasePass(ctx, grid);
-
-    // PASS 2: Layer Overlays (Slope, Energy Cost, Hazards, Reachability)
-    renderLayerOverlaysPass(ctx, grid);
-
-    // PASS 3: Grid Boundary Lines
+    renderLayerOverlaysPass(ctx, grid, isTargetMap);
     renderGridLinesPass(ctx);
-
-    // PASS 4: A* Path Line
-    const isTarget = canvas.id === 'map-canvas-target';
-    renderPathLinePass(ctx, isTarget);
-
-    // PASS 5: Waypoint Markers (A & B)
+    renderPathLinePass(ctx, isTargetMap);
     renderWaypointMarkersPass(ctx);
-
-    // PASS 6: Hover Cell Highlight
+    renderRoverPass(ctx, isTargetMap);
     renderHoverHighlightPass(ctx);
 
     ctx.restore();
   }
 
   function render() {
-    renderCanvasInstance(ctxEarth, canvasEarth, AppState.facts.heightmap);
+    const useTargetOnPrimary = isSingleViewTargetSelected();
+    const primaryGrid = useTargetOnPrimary ? AppState.facts.targetHeightmap : AppState.facts.heightmap;
+    renderCanvasInstance(ctxEarth, canvasEarth, primaryGrid, useTargetOnPrimary);
+
     if (AppState.compareMode && ctxTarget && canvasTarget) {
-      renderCanvasInstance(ctxTarget, canvasTarget, AppState.facts.targetHeightmap);
+      renderCanvasInstance(ctxTarget, canvasTarget, AppState.facts.targetHeightmap, true);
     }
   }
 
   window.renderAllMaps = render;
 
-  // -----------------------------------------------------------
-  // PASS 1: Base Terrain (0m Dark to 100m Bright Grayscale)
-  // -----------------------------------------------------------
   function renderTerrainBasePass(context, grid) {
     const showElevation = AppState.layerToggles.elevation;
 
@@ -774,12 +621,8 @@ function initMapCanvases() {
     }
   }
 
-  // -----------------------------------------------------------
-  // PASS 2: Colored Layer Overlays (Terramechanics & Acts Matrix)
-  // -----------------------------------------------------------
-  function renderLayerOverlaysPass(context, grid) {
+  function renderLayerOverlaysPass(context, grid, isTarget) {
     const toggles = AppState.layerToggles;
-    const isTarget = (grid === AppState.facts.targetGrid || grid === AppState.facts.targetHeightmap);
 
     const hazardMatrix = isTarget ? AppState.acts?.targetHazards : (AppState.acts?.earthHazards || AppState.acts?.hazardMatrix);
     const energyMatrix = isTarget ? AppState.acts?.targetEnergy : (AppState.acts?.earthEnergy || AppState.acts?.energyCostMatrix);
@@ -791,7 +634,6 @@ function initMapCanvases() {
         const px = x * CELL_PIXELS;
         const py = y * CELL_PIXELS;
 
-        // 1. Slope Overlay: Blue (0°) to Yellow (45°)
         if (toggles.slope) {
           const slope = slopeMatrix ? slopeMatrix[y][x] : computeSlopeDegrees(grid, x, y);
           const t = Math.min(1.0, Math.max(0.0, slope / 45.0));
@@ -802,12 +644,11 @@ function initMapCanvases() {
           context.fillRect(px, py, CELL_PIXELS, CELL_PIXELS);
         }
 
-        // 2. Energy Cost Overlay: Thermal Heatmap (Green 1.0x -> Orange 2.5x -> Purple 4.0x+)
         if (toggles.energyCost) {
           const cost = (energyMatrix && energyMatrix[y]) ? energyMatrix[y][x] : 1.0;
           let r, g, b;
           if (cost <= 1.0) {
-            r = 34; g = 197; b = 94; // Green
+            r = 34; g = 197; b = 94;
           } else if (cost <= 2.5) {
             const u = (cost - 1.0) / 1.5;
             r = Math.round(34 + u * (249 - 34));
@@ -819,14 +660,13 @@ function initMapCanvases() {
             g = Math.round(115 + u * (85 - 115));
             b = Math.round(22 + u * (247 - 22));
           } else {
-            r = 168; g = 85; b = 247; // Purple (soil slip penalty)
+            r = 168; g = 85; b = 247;
           }
 
           context.fillStyle = `rgba(${r}, ${g}, ${b}, 0.52)`;
           context.fillRect(px, py, CELL_PIXELS, CELL_PIXELS);
         }
 
-        // 3. Hazards Overlay: Semi-transparent crimson red (rgba(239, 68, 68, 0.65))
         if (toggles.hazards) {
           const isHazard = (hazardMatrix && hazardMatrix[y]) ? hazardMatrix[y][x] : isCellHazard(grid, x, y, AppState.config.rover?.maxSlopeDeg ?? 20);
           if (isHazard) {
@@ -835,7 +675,6 @@ function initMapCanvases() {
           }
         }
 
-        // 4. Reachability Overlay: Cyan tint
         if (toggles.reachability) {
           const isReachable = (reachabilityMatrix && reachabilityMatrix[y]) ? reachabilityMatrix[y][x] : 0;
           if (isReachable === 1) {
@@ -847,9 +686,6 @@ function initMapCanvases() {
     }
   }
 
-  // -----------------------------------------------------------
-  // PASS 3: Grid Boundary Lines
-  // -----------------------------------------------------------
   function renderGridLinesPass(context) {
     context.strokeStyle = 'rgba(255, 255, 255, 0.05)';
     context.lineWidth = 0.5;
@@ -868,12 +704,11 @@ function initMapCanvases() {
     }
   }
 
-  // -----------------------------------------------------------
-  // PASS 4: A* Path Line
-  // -----------------------------------------------------------
   function renderPathLinePass(context, isTarget) {
     const path = isTarget ? (AppState.acts && AppState.acts.targetPath) : (AppState.acts && (AppState.acts.earthPath || AppState.acts.path));
     if (!path || path.length < 2) return;
+
+    const maxIdx = Math.max(1, Math.floor(RoverAnimState.progress * (path.length - 1)));
 
     context.save();
     context.strokeStyle = isTarget ? '#f97316' : '#38bdf8';
@@ -884,19 +719,17 @@ function initMapCanvases() {
     context.shadowBlur = 12;
 
     context.beginPath();
-    path.forEach((pt, idx) => {
+    for (let idx = 0; idx <= maxIdx; idx++) {
+      const pt = path[idx];
       const cx = (pt.x + 0.5) * CELL_PIXELS;
       const cy = (pt.y + 0.5) * CELL_PIXELS;
       if (idx === 0) context.moveTo(cx, cy);
       else context.lineTo(cx, cy);
-    });
+    }
     context.stroke();
     context.restore();
   }
 
-  // -----------------------------------------------------------
-  // PASS 5: Waypoint Markers (Start Point A & End Point B)
-  // -----------------------------------------------------------
   function renderWaypointMarkersPass(context) {
     const mission = AppState.config && AppState.config.mission;
     if (!mission) return;
@@ -904,26 +737,26 @@ function initMapCanvases() {
     if (mission.start) {
       const cx = (mission.start.x + 0.5) * CELL_PIXELS;
       const cy = (mission.start.y + 0.5) * CELL_PIXELS;
-      drawStartMarker(context, cx, cy);
+      drawMarker(context, cx, cy, '#22c55e', 'rgba(34, 197, 94, 0.25)', 'A');
     }
 
     if (mission.end) {
       const cx = (mission.end.x + 0.5) * CELL_PIXELS;
       const cy = (mission.end.y + 0.5) * CELL_PIXELS;
-      drawEndMarker(context, cx, cy);
+      drawMarker(context, cx, cy, '#06b6d4', 'rgba(6, 182, 212, 0.25)', 'B');
     }
   }
 
-  function drawStartMarker(context, cx, cy) {
+  function drawMarker(context, cx, cy, fillHex, haloRgba, label) {
     context.save();
     context.beginPath();
     context.arc(cx, cy, 14, 0, Math.PI * 2);
-    context.fillStyle = 'rgba(34, 197, 94, 0.25)';
+    context.fillStyle = haloRgba;
     context.fill();
 
     context.beginPath();
     context.arc(cx, cy, 9, 0, Math.PI * 2);
-    context.fillStyle = '#22c55e';
+    context.fillStyle = fillHex;
     context.fill();
     context.lineWidth = 2;
     context.strokeStyle = '#ffffff';
@@ -933,36 +766,49 @@ function initMapCanvases() {
     context.font = 'bold 10px sans-serif';
     context.textAlign = 'center';
     context.textBaseline = 'middle';
-    context.fillText('A', cx, cy + 0.5);
+    context.fillText(label, cx, cy + 0.5);
     context.restore();
   }
 
-  function drawEndMarker(context, cx, cy) {
+  function renderRoverPass(context, isTarget) {
+    const path = isTarget ? (AppState.acts && AppState.acts.targetPath) : (AppState.acts && (AppState.acts.earthPath || AppState.acts.path));
+    if (!path || path.length === 0) return;
+
+    const floatIdx = RoverAnimState.progress * (path.length - 1);
+    const idx0 = Math.floor(floatIdx);
+    const idx1 = Math.min(path.length - 1, idx0 + 1);
+    const frac = floatIdx - idx0;
+
+    const p0 = path[idx0];
+    const p1 = path[idx1];
+    const rx = p0.x + (p1.x - p0.x) * frac;
+    const ry = p0.y + (p1.y - p0.y) * frac;
+
+    const cx = (rx + 0.5) * CELL_PIXELS;
+    const cy = (ry + 0.5) * CELL_PIXELS;
+
     context.save();
     context.beginPath();
-    context.arc(cx, cy, 14, 0, Math.PI * 2);
-    context.fillStyle = 'rgba(6, 182, 212, 0.25)';
+    context.arc(cx, cy, 16, 0, Math.PI * 2);
+    context.fillStyle = isTarget ? 'rgba(249, 115, 22, 0.32)' : 'rgba(56, 189, 248, 0.32)';
     context.fill();
 
-    context.beginPath();
-    context.arc(cx, cy, 9, 0, Math.PI * 2);
-    context.fillStyle = '#06b6d4';
-    context.fill();
+    context.fillStyle = '#facc15';
+    context.strokeStyle = '#0f172a';
     context.lineWidth = 2;
-    context.strokeStyle = '#ffffff';
+    context.beginPath();
+    context.roundRect(cx - 8, cy - 8, 16, 16, 4);
+    context.fill();
     context.stroke();
 
     context.fillStyle = '#0f172a';
-    context.font = 'bold 10px sans-serif';
+    context.font = 'bold 9px sans-serif';
     context.textAlign = 'center';
     context.textBaseline = 'middle';
-    context.fillText('B', cx, cy + 0.5);
+    context.fillText('R', cx, cy + 0.5);
     context.restore();
   }
 
-  // -----------------------------------------------------------
-  // PASS 6: Hover Cell Highlight
-  // -----------------------------------------------------------
   function renderHoverHighlightPass(context) {
     const hover = ViewState.hoveredCell;
     if (!hover) return;
@@ -976,11 +822,13 @@ function initMapCanvases() {
     context.restore();
   }
 
-  // -----------------------------------------------------------
-  // Coordinate Mapping: Screen -> Grid Cell
-  // -----------------------------------------------------------
   function screenToGrid(canvas, screenX, screenY) {
     const rect = canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null;
+    if (screenX < rect.left || screenX > rect.right || screenY < rect.top || screenY > rect.bottom) {
+      return null;
+    }
+
     const mouseX = screenX - rect.left;
     const mouseY = screenY - rect.top;
 
@@ -991,7 +839,7 @@ function initMapCanvases() {
     const cellY = Math.floor(worldY / CELL_PIXELS);
 
     if (cellX >= 0 && cellX < GRID_SIZE && cellY >= 0 && cellY < GRID_SIZE) {
-      const isTarget = canvas.id === 'map-canvas-target';
+      const isTarget = (canvas.id === 'map-canvas-target') || isSingleViewTargetSelected();
       const grid = isTarget ? AppState.facts.targetHeightmap : AppState.facts.heightmap;
       const z = grid ? grid[cellY][cellX] : 0;
       return { x: cellX, y: cellY, z, isTarget };
@@ -999,9 +847,6 @@ function initMapCanvases() {
     return null;
   }
 
-  // -----------------------------------------------------------
-  // Canvas Mouse & Drag Event Handling
-  // -----------------------------------------------------------
   const canvases = [canvasEarth, canvasTarget].filter(Boolean);
 
   canvases.forEach(cvs => {
@@ -1048,8 +893,6 @@ function initMapCanvases() {
       updateMissionStatusHUD();
       updateLegendUI();
       render();
-
-      console.log(`[Colander] Waypoint placed (${cvs.id}):`, AppState.config.mission);
     });
 
     cvs.addEventListener('wheel', (e) => {
@@ -1110,14 +953,12 @@ function initMapCanvases() {
         tooltip.style.top = `${tooltipY}px`;
       }
       render();
-    } else {
-      if (ViewState.hoveredCell !== null) {
-        ViewState.hoveredCell = null;
-        if (hudCoord) hudCoord.textContent = '--';
-        if (hudElev) hudElev.textContent = '--';
-        if (tooltip) tooltip.style.display = 'none';
-        render();
-      }
+    } else if (ViewState.hoveredCell !== null) {
+      ViewState.hoveredCell = null;
+      if (hudCoord) hudCoord.textContent = '--';
+      if (hudElev) hudElev.textContent = '--';
+      if (tooltip) tooltip.style.display = 'none';
+      render();
     }
   });
 
@@ -1143,7 +984,6 @@ function initMapCanvases() {
     render();
   }
 
-  // HUD Zoom and Pan Controls
   const btnZoomIn = document.getElementById('btn-zoom-in');
   const btnZoomOut = document.getElementById('btn-zoom-out');
   const btnZoomReset = document.getElementById('btn-zoom-reset');
@@ -1168,9 +1008,7 @@ function initMapCanvases() {
     });
   }
 
-  if (btnZoomReset) {
-    btnZoomReset.addEventListener('click', () => resetView());
-  }
+  if (btnZoomReset) btnZoomReset.addEventListener('click', () => resetView());
 
   const panStep = 60;
   if (btnPanUp) btnPanUp.addEventListener('click', () => { ViewState.panY += panStep; render(); });
@@ -1182,9 +1020,6 @@ function initMapCanvases() {
   updateMissionStatusHUD();
 }
 
-/**
- * Updates HUD badge text reflecting Start and End point status
- */
 function updateMissionStatusHUD() {
   const missionText = document.getElementById('hud-mission-status');
   if (!missionText) return;
@@ -1201,12 +1036,8 @@ function updateMissionStatusHUD() {
     missionText.textContent = 'Click grid to set Start (A)';
   }
 }
+window.updateMissionStatusHUD = updateMissionStatusHUD;
 
-/**
- * -------------------------------------------------------------
- * 6. Telemetry Drawer & Simulation Execution (Batch 7)
- * -------------------------------------------------------------
- */
 function initDrawerControls() {
   const drawer = document.getElementById('telemetry-summary');
   const header = document.getElementById('btn-toggle-telemetry');
@@ -1246,230 +1077,15 @@ function initDrawerControls() {
 }
 
 function runSimulation() {
-  console.log('[Colander] Executing Rover Mobility Simulation...');
-  if (typeof sieveStats === 'function') {
-    return sieveStats(AppState.acts);
-  } else if (window.sieveStats) {
+  if (typeof window.sieveStats === 'function') {
     return window.sieveStats(AppState.acts);
   }
-
-  // Fallback if simulation_engine.js is not loaded
-  // Auto-set default mission waypoints if none placed
-  if (!AppState.config.mission.start) {
-    AppState.config.mission.start = { x: 8, y: 8, z: AppState.facts.heightmap[8][8] };
-    AppState.facts.missionSetup.startPoint = AppState.config.mission.start;
-  }
-  if (!AppState.config.mission.end) {
-    AppState.config.mission.end = { x: 50, y: 50, z: AppState.facts.heightmap[50][50] };
-    AppState.facts.missionSetup.endPoint = AppState.config.mission.end;
-  }
-  updateMissionStatusHUD();
-
-  const maxSlopeDeg = AppState.config.rover?.maxSlopeDeg ?? 20;
-  const start = AppState.config.mission.start;
-  const end = AppState.config.mission.end;
-
-  // 1. Solve Earth Path
-  const earthPath = solvePathAStar(AppState.facts.heightmap, start, end, maxSlopeDeg);
-  AppState.acts.path = earthPath;
-
-  // 2. Solve Target Path (Moon/Mars)
-  const targetPath = solvePathAStar(AppState.facts.targetHeightmap, start, end, maxSlopeDeg);
-  AppState.acts.targetPath = targetPath;
-
-  // Compute stats for Earth
-  let lengthE = 0, sumSlopeE = 0, maxTiltE = 0;
-  for (let i = 0; i < earthPath.length; i++) {
-    const pt = earthPath[i];
-    const s = computeSlopeDegrees(AppState.facts.heightmap, pt.x, pt.y);
-    sumSlopeE += s;
-    if (s > maxTiltE) maxTiltE = s;
-    if (i > 0) {
-      const prev = earthPath[i - 1];
-      lengthE += Math.hypot(pt.x - prev.x, pt.y - prev.y, (pt.z - prev.z) * 0.08) * CELL_WORLD_METERS;
-    }
-  }
-  const avgSlopeE = earthPath.length > 0 ? (sumSlopeE / earthPath.length) : 0;
-  const energyE = Math.round(lengthE * (AppState.config.rover.energyCost || 1.0) * (1.0 + avgSlopeE * 0.06) * 11.5);
-
-  // Hazards bypassed on Earth
-  let hazardsAvoidedE = 0;
-  const pathSetE = new Set(earthPath.map(p => `${p.x},${p.y}`));
-  for (const pt of earthPath) {
-    for (let dy = -2; dy <= 2; dy++) {
-      for (let dx = -2; dx <= 2; dx++) {
-        const nx = pt.x + dx;
-        const ny = pt.y + dy;
-        if (nx >= 0 && nx < GRID_SIZE && ny >= 0 && ny < GRID_SIZE) {
-          if (!pathSetE.has(`${nx},${ny}`) && isCellHazard(AppState.facts.heightmap, nx, ny, maxSlopeDeg)) {
-            hazardsAvoidedE++;
-          }
-        }
-      }
-    }
-  }
-  hazardsAvoidedE = Math.min(55, Math.round(hazardsAvoidedE / 3));
-
-  // Reachable terrain on Earth
-  const reachableMapE = computeReachableMap(AppState.facts.heightmap, start.x, start.y, maxSlopeDeg);
-  let reachableCountE = 0;
-  for (let y = 0; y < GRID_SIZE; y++) {
-    for (let x = 0; x < GRID_SIZE; x++) {
-      if (reachableMapE[y][x]) reachableCountE++;
-    }
-  }
-  const reachabilityPctE = parseFloat(((reachableCountE / (GRID_SIZE * GRID_SIZE)) * 100).toFixed(1));
-
-  // Compute stats for Target (Moon/Mars)
-  let lengthT = 0, sumSlopeT = 0, maxTiltT = 0;
-  for (let i = 0; i < targetPath.length; i++) {
-    const pt = targetPath[i];
-    const s = computeSlopeDegrees(AppState.facts.targetHeightmap, pt.x, pt.y);
-    sumSlopeT += s;
-    if (s > maxTiltT) maxTiltT = s;
-    if (i > 0) {
-      const prev = targetPath[i - 1];
-      lengthT += Math.hypot(pt.x - prev.x, pt.y - prev.y, (pt.z - prev.z) * 0.08) * CELL_WORLD_METERS;
-    }
-  }
-  const avgSlopeT = targetPath.length > 0 ? (sumSlopeT / targetPath.length) : 0;
-
-  const site = AppState.facts.site || 'Mars';
-  const gTarget = site === 'Moon' ? 1.62 : (site === 'Mars' ? 3.72 : 9.81);
-  const slipPenalty = site === 'Moon' ? 24 : (site === 'Mars' ? 18 : 10);
-  const energyT = Math.round(lengthT * (AppState.config.rover.energyCost || 1.0) * (1.0 + avgSlopeT * 0.08) * (1.0 + slipPenalty / 100) * 11.2);
-
-  // Hazards bypassed on Target
-  let hazardsAvoidedT = 0;
-  const pathSetT = new Set(targetPath.map(p => `${p.x},${p.y}`));
-  for (const pt of targetPath) {
-    for (let dy = -2; dy <= 2; dy++) {
-      for (let dx = -2; dx <= 2; dx++) {
-        const nx = pt.x + dx;
-        const ny = pt.y + dy;
-        if (nx >= 0 && nx < GRID_SIZE && ny >= 0 && ny < GRID_SIZE) {
-          if (!pathSetT.has(`${nx},${ny}`) && isCellHazard(AppState.facts.targetHeightmap, nx, ny, maxSlopeDeg)) {
-            hazardsAvoidedT++;
-          }
-        }
-      }
-    }
-  }
-  hazardsAvoidedT = Math.min(75, Math.round(hazardsAvoidedT / 3));
-
-  // Reachable terrain on Target
-  const reachableMapT = computeReachableMap(AppState.facts.targetHeightmap, start.x, start.y, maxSlopeDeg);
-  let reachableCountT = 0;
-  for (let y = 0; y < GRID_SIZE; y++) {
-    for (let x = 0; x < GRID_SIZE; x++) {
-      if (reachableMapT[y][x]) reachableCountT++;
-    }
-  }
-  const reachabilityPctT = parseFloat(((reachableCountT / (GRID_SIZE * GRID_SIZE)) * 100).toFixed(1));
-
-  // Analog Similarity Score Calculation
-  const slopeDelta = Math.abs(avgSlopeE - avgSlopeT);
-  const lengthDelta = Math.abs(lengthE - lengthT);
-  const reachDelta = Math.abs(reachabilityPctE - reachabilityPctT);
-  const similarityScore = Math.max(54, Math.min(94, Math.round(100 - slopeDelta * 2.0 - lengthDelta * 0.3 - reachDelta * 0.2)));
-
-  // Update AppState.stats
-  AppState.stats = {
-    energyUsed: energyE,
-    energyTarget: energyT,
-    hazardsAvoided: hazardsAvoidedE,
-    hazardsTarget: hazardsAvoidedT,
-    pathLength: parseFloat(lengthE.toFixed(1)),
-    lengthTarget: parseFloat(lengthT.toFixed(1)),
-    avgSlope: parseFloat(avgSlopeE.toFixed(1)),
-    avgSlopeTarget: parseFloat(avgSlopeT.toFixed(1)),
-    maxTilt: parseFloat(maxTiltE.toFixed(1)),
-    maxTiltTarget: parseFloat(maxTiltT.toFixed(1)),
-    reachability: reachabilityPctE,
-    reachabilityTarget: reachabilityPctT,
-    analogSimilarity: similarityScore
-  };
-
-  // Determine Analog Viability Verdict
-  let verdictTitle = '';
-  let verdictClass = '';
-  let verdictDesc = '';
-  if (similarityScore >= 85) {
-    verdictTitle = 'VALIDATED MOBILITY ANALOG';
-    verdictClass = 'verdict-validated';
-    verdictDesc = 'Terrestrial site demonstrates high-fidelity mobility validation for planetary mission planning.';
-  } else if (similarityScore >= 65) {
-    verdictTitle = 'CONDITIONAL ANALOG';
-    verdictClass = 'verdict-conditional';
-    verdictDesc = 'Moderate mobility correlation; operational limits require wheel slip compensation.';
-  } else {
-    verdictTitle = 'POOR ANALOG MATCH';
-    verdictClass = 'verdict-poor';
-    verdictDesc = 'Critical terrain divergence; terrestrial analog fails to reproduce target hazard distribution.';
-  }
-
-  // Update Detailed Stats Comparison Cards in Telemetry Drawer
-  const isCompare = AppState.compareMode;
-  const tEnergy = document.getElementById('t-stat-energy');
-  const tSlope = document.getElementById('t-stat-avg-slope');
-  const tTilt = document.getElementById('t-stat-max-tilt');
-  const tReach = document.getElementById('t-stat-reachability');
-
-  if (tEnergy) tEnergy.textContent = isCompare ? `${energyE} J | ${energyT} J` : `${energyE} J`;
-  if (tSlope) tSlope.textContent = isCompare ? `${avgSlopeE.toFixed(1)}° | ${avgSlopeT.toFixed(1)}°` : `${avgSlopeE.toFixed(1)}°`;
-  if (tTilt) tTilt.textContent = isCompare ? `${maxTiltE.toFixed(1)}° | ${maxTiltT.toFixed(1)}°` : `${maxTiltE.toFixed(1)}°`;
-  if (tReach) tReach.textContent = isCompare ? `${reachabilityPctE}% | ${reachabilityPctT}%` : `${reachabilityPctE}%`;
-
-  // Update Automated Engineering Facts & Acts Log
-  const logBox = document.getElementById('engineering-log');
-  if (logBox) {
-    const timestamp = new Date().toLocaleTimeString();
-    logBox.textContent = `[${timestamp}] MISSION TELEMETRY RUN COMPLETED // SEQUENCE #0842\n` +
-      `• Rover navigated ${lengthE.toFixed(1)}m on Earth ${isCompare ? `vs ${lengthT.toFixed(1)}m on ${site}` : ''}.\n` +
-      `• Avoided ${hazardsAvoidedE} terrestrial hazard cells (slope > ${maxSlopeDeg}° or step > 0.3m) ${isCompare ? `vs ${hazardsAvoidedT} avoided on ${site}` : ''}.\n` +
-      `• Mean gradient: ${avgSlopeE.toFixed(1)}° (Max Tilt: ${maxTiltE.toFixed(1)}°).\n` +
-      `• Soil slip penalty added ${slipPenalty}% energy overhead under ${gTarget} m/s² gravitational environment.\n` +
-      `• Terrain Reachability: ${reachabilityPctE}% reachable on Earth ${isCompare ? `vs ${reachabilityPctT}% on ${site}` : ''}.\n` +
-      `• Verdict: ${verdictTitle} (${similarityScore}% match).`;
-  }
-
-  // Update Analog Viability Verdict Gauge
-  const scorePct = document.getElementById('verdict-score-pct');
-  const meterFill = document.getElementById('verdict-meter-fill');
-  const badge = document.getElementById('verdict-status-badge');
-  const desc = document.getElementById('verdict-desc');
-
-  if (scorePct) scorePct.textContent = `${similarityScore}%`;
-  if (meterFill) meterFill.style.width = `${similarityScore}%`;
-  if (badge) {
-    badge.className = `verdict-badge ${verdictClass}`;
-    badge.textContent = verdictTitle;
-  }
-  if (desc) desc.textContent = verdictDesc;
-
-  // Open the Telemetry Drawer
-  const drawer = document.getElementById('telemetry-summary');
-  const chevron = document.getElementById('drawer-chevron');
-  const runStatus = document.getElementById('telemetry-run-status');
-
-  if (drawer) {
-    drawer.classList.remove('collapsed');
-  }
-  if (chevron) chevron.textContent = '▼';
-  if (runStatus) runStatus.textContent = 'RUN COMPLETE';
-
-  // Redraw maps with glowing path trajectory
-  if (window.renderAllMaps) window.renderAllMaps();
 }
 
-/**
- * -------------------------------------------------------------
- * 7. Bottom Metrics Bar Telemetry
- * -------------------------------------------------------------
- */
 function updateMetricsUI() {
   const stats = (window.AppState && window.AppState.stats) || {};
   const isCompare = !!(window.AppState && window.AppState.compareMode);
+  const singleTarget = isSingleViewTargetSelected();
 
   const elEnergy = document.getElementById('stat-energy');
   const elHazards = document.getElementById('stat-hazards');
@@ -1477,91 +1093,45 @@ function updateMetricsUI() {
   const elSimilarity = document.getElementById('stat-similarity');
 
   if (isCompare) {
-    // 1. Paired Energy Used
     if (elEnergy) {
-      const eEarth = stats.earth?.energy ?? stats.energyEarth ?? stats.energyUsed ?? stats.energy ?? null;
-      const eTarget = stats.target?.energy ?? stats.energyTarget ?? (eEarth != null ? (Number(eEarth) * 0.42).toFixed(1) : null);
-      if (eEarth != null && eTarget != null) {
-        elEnergy.textContent = `${Number(eEarth).toLocaleString(undefined, { maximumFractionDigits: 1 })} J | ${Number(eTarget).toLocaleString(undefined, { maximumFractionDigits: 1 })} J`;
-      } else {
-        elEnergy.textContent = '-- J | -- J';
-      }
+      const eEarth = stats.energyEarth ?? stats.energyUsed ?? null;
+      const eTarget = stats.energyTarget ?? null;
+      elEnergy.textContent = (eEarth != null && eTarget != null) ? `${eEarth} J | ${eTarget} J` : '-- J | -- J';
     }
-
-    // 2. Paired Hazards Avoided
     if (elHazards) {
-      const hEarth = stats.earth?.hazards ?? stats.hazardsEarth ?? stats.hazardsAvoided ?? stats.hazards ?? null;
-      const hTarget = stats.target?.hazards ?? stats.hazardsTarget ?? (hEarth != null ? Math.max(0, Math.round(Number(hEarth) * 1.5)) : null);
-      if (hEarth != null && hTarget != null) {
-        elHazards.textContent = `${hEarth} | ${hTarget}`;
-      } else {
-        elHazards.textContent = '-- | --';
-      }
+      const hEarth = stats.hazardsEarth ?? stats.hazardsAvoided ?? null;
+      const hTarget = stats.hazardsTarget ?? null;
+      elHazards.textContent = (hEarth != null && hTarget != null) ? `${hEarth} | ${hTarget}` : '-- | --';
     }
-
-    // 3. Paired Path Length
     if (elLength) {
-      const lEarth = stats.earth?.length ?? stats.lengthEarth ?? stats.pathLength ?? stats.length ?? null;
-      const lTarget = stats.target?.length ?? stats.lengthTarget ?? (lEarth != null ? (Number(lEarth) * 1.08).toFixed(1) : null);
-      if (lEarth != null && lTarget != null) {
-        elLength.textContent = `${Number(lEarth).toLocaleString(undefined, { maximumFractionDigits: 1 })} m | ${Number(lTarget).toLocaleString(undefined, { maximumFractionDigits: 1 })} m`;
-      } else {
-        elLength.textContent = '-- m | -- m';
-      }
+      const lEarth = stats.lengthEarth ?? stats.pathLength ?? null;
+      const lTarget = stats.lengthTarget ?? null;
+      elLength.textContent = (lEarth != null && lTarget != null) ? `${lEarth} m | ${lTarget} m` : '-- m | -- m';
     }
-
-    // 4. Analog Similarity Score
     if (elSimilarity) {
-      const sim = stats.analogSimilarity ?? stats.similarityScore ?? stats.similarity;
-      if (sim != null && !isNaN(sim)) {
-        const pct = sim > 1 ? sim : sim * 100;
-        elSimilarity.textContent = `${pct.toFixed(1)}%`;
-      } else {
-        elSimilarity.textContent = '--%';
-      }
+      const sim = stats.analogSimilarity;
+      elSimilarity.textContent = (sim != null && !isNaN(sim)) ? `${Number(sim).toFixed(1)}%` : '--%';
     }
   } else {
-    // Single View
     if (elEnergy) {
-      const energy = stats.energyUsed ?? stats.energy ?? stats.energyCost;
-      if (energy != null && !isNaN(energy)) {
-        elEnergy.textContent = `${Number(energy).toLocaleString(undefined, { maximumFractionDigits: 1 })} J`;
-      } else {
-        elEnergy.textContent = '-- J';
-      }
+      const energy = singleTarget ? stats.energyTarget : stats.energyUsed;
+      elEnergy.textContent = (energy != null && !isNaN(energy)) ? `${energy} J` : '-- J';
     }
-
     if (elHazards) {
-      const hazards = stats.hazardsAvoided ?? stats.hazards ?? stats.hazardsCount;
-      if (hazards != null && !isNaN(hazards)) {
-        elHazards.textContent = `${Number(hazards).toLocaleString()}`;
-      } else {
-        elHazards.textContent = '--';
-      }
+      const hazards = singleTarget ? stats.hazardsTarget : stats.hazardsAvoided;
+      elHazards.textContent = (hazards != null && !isNaN(hazards)) ? `${hazards}` : '--';
     }
-
     if (elLength) {
-      const length = stats.pathLength ?? stats.length ?? stats.distance;
-      if (length != null && !isNaN(length)) {
-        elLength.textContent = `${Number(length).toLocaleString(undefined, { maximumFractionDigits: 1 })} m`;
-      } else {
-        elLength.textContent = '-- m';
-      }
+      const length = singleTarget ? stats.lengthTarget : stats.pathLength;
+      elLength.textContent = (length != null && !isNaN(length)) ? `${length} m` : '-- m';
     }
-
     if (elSimilarity) {
-      const sim = stats.analogSimilarity ?? stats.similarityScore ?? stats.similarity;
-      if (sim != null && !isNaN(sim)) {
-        const pct = sim > 1 ? sim : sim * 100;
-        elSimilarity.textContent = `${pct.toFixed(1)}%`;
-      } else {
-        elSimilarity.textContent = '--%';
-      }
+      const sim = stats.analogSimilarity;
+      elSimilarity.textContent = (sim != null && !isNaN(sim)) ? `${Number(sim).toFixed(1)}%` : '--%';
     }
   }
 }
 
-// Expose functions globally
 window.updateMetricsUI = updateMetricsUI;
 window.updateLegendUI = updateLegendUI;
 window.runSimulation = runSimulation;

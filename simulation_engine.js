@@ -1,50 +1,91 @@
 /**
- * Colander 1 - Batch 8 & 9: Terrain, Geotechnical Facts & Terramechanics Acts Engine
+ * Planetary Terrain Mapping - Terrain, Geotechnical Facts & Terramechanics Acts Engine
  * simulation_engine.js
- *
- * Manages the Colander 1 workflow:
- * - Procedural DEM generation (Salar de Uyuni Rim & Mars Jezero Crater)
- * - 8-neighbor local slope matrix calculation
- * - Terramechanics-based Hazard classification (shear failure & slope limits)
- * - Tri-component Energy Cost matrix (Base + Incline + Slip)
- * - BFS Reachability flood-fill
- * - Reactive state pipeline wiring to AppState.facts and AppState.acts
  */
 
+// Shared Global Grid Constants (Defined once here and shared with app.js)
 const GRID_SIZE = 60;
+const CELL_PIXELS = 16;
+const WORLD_WIDTH = GRID_SIZE * CELL_PIXELS;
+const WORLD_HEIGHT = GRID_SIZE * CELL_PIXELS;
 const CELL_WORLD_METERS = 1.0;
+
+/**
+ * =============================================================
+ * TEAMMATE DATA SLOT (Paste 2D Elevation Arrays Here When Ready)
+ * =============================================================
+ * Leave as `null` to use the built-in DEM generators right now.
+ * If you paste a 2D array (e.g., [[10, 12, ...], ...]) into any slot below,
+ * the engine will automatically resize/normalize it to 60x60 and render it!
+ */
+const CUSTOM_PRESET_DATA = {
+  uyuni: null,   // Replace `null` with your friend's Uyuni 2D array when ready
+  jezero: null,  // Replace `null` with your friend's Jezero 2D array when ready
+  moon: null     // Replace `null` with your friend's Moon 2D array when ready
+};
+
+/**
+ * Helper to normalize any 2D elevation array into a clean 60x60 grid (0m - 100m)
+ */
+function normalizeCustomGridTo60x60(raw2DArray) {
+  if (!Array.isArray(raw2DArray) || raw2DArray.length === 0) return null;
+  const srcRows = raw2DArray.length;
+  const srcCols = Array.isArray(raw2DArray[0]) ? raw2DArray[0].length : 0;
+  if (srcCols === 0) return null;
+
+  let minVal = Infinity;
+  let maxVal = -Infinity;
+  for (let r = 0; r < srcRows; r++) {
+    for (let c = 0; c < srcCols; c++) {
+      const v = Number(raw2DArray[r][c]);
+      if (!isNaN(v)) {
+        if (v < minVal) minVal = v;
+        if (v > maxVal) maxVal = v;
+      }
+    }
+  }
+  const range = (maxVal - minVal) || 1;
+
+  const grid = [];
+  for (let y = 0; y < GRID_SIZE; y++) {
+    const row = [];
+    const sy = Math.min(srcRows - 1, Math.floor((y / GRID_SIZE) * srcRows));
+    for (let x = 0; x < GRID_SIZE; x++) {
+      const sx = Math.min(srcCols - 1, Math.floor((x / GRID_SIZE) * srcCols));
+      const rawVal = Number(raw2DArray[sy][sx]) || 0;
+      const normVal = ((rawVal - minVal) / range) * 95.0 + 2.0;
+      row.push(parseFloat(normVal.toFixed(2)));
+    }
+    grid.push(row);
+  }
+  return grid;
+}
 
 /**
  * -------------------------------------------------------------
  * 1. Procedural DEM Generators (60x60 Z Elevation in Meters)
  * -------------------------------------------------------------
  */
-
-/**
- * "Salar de Uyuni Rim"
- * Flat basin (salt crust) on left half transitioning into a steep, rough scarp on the right.
- * Constraints: g = 9.81 m/s², phi = 32°, c = 4.5 kPa.
- */
 function generateSalarDeUyuniDEM() {
-  const grid = [];
+  if (CUSTOM_PRESET_DATA.uyuni) {
+    const custom = normalizeCustomGridTo60x60(CUSTOM_PRESET_DATA.uyuni);
+    if (custom) return custom;
+  }
 
+  const grid = [];
   for (let y = 0; y < GRID_SIZE; y++) {
     const row = [];
     for (let x = 0; x < GRID_SIZE; x++) {
       const nx = x / (GRID_SIZE - 1);
       const ny = y / (GRID_SIZE - 1);
 
-      // Left half: Flat salt crust basin (~10m - 12m elevation with sub-meter polygonal crust relief)
       const saltCrustBase = 11.5;
       const polygonRelief = (Math.sin(nx * 48.0) * Math.cos(ny * 48.0) + Math.sin((nx + ny) * 36.0)) * 0.25;
       const basinElev = saltCrustBase + polygonRelief;
 
-      // Transition scarp: Sigmoidal step beginning around x/60 = 0.44 to 0.68
       const t = Math.max(0, Math.min(1, (nx - 0.44) / 0.26));
-      // Smoothstep interpolation (3t² - 2t³)
       const scarpFactor = t * t * (3.0 - 2.0 * t);
 
-      // Right half: Steep, rough scarp with overlapping sinusoidal tectonic ridges
       const ridge1 = Math.sin(ny * Math.PI * 5.0 + nx * 3.5) * 16.0;
       const ridge2 = Math.cos(ny * Math.PI * 11.0 - nx * 7.0) * 8.0;
       const talusRoughness = Math.sin(nx * 28.0 + ny * 32.0) * Math.cos(nx * 18.0) * 4.2;
@@ -55,20 +96,19 @@ function generateSalarDeUyuniDEM() {
     }
     grid.push(row);
   }
-
   return grid;
 }
 
-/**
- * "Mars - Jezero Crater"
- * Uneven base terrain featuring a large, deep radial impact crater in the center.
- * Constraints: g = 3.72 m/s², phi = 18°, c = 0.8 kPa.
- */
 function generateJezeroCraterDEM() {
+  if (CUSTOM_PRESET_DATA.jezero) {
+    const custom = normalizeCustomGridTo60x60(CUSTOM_PRESET_DATA.jezero);
+    if (custom) return custom;
+  }
+
   const grid = [];
   const cx = 29.5;
   const cy = 29.5;
-  const craterRadius = 18.5; // Radial crater extent in cells
+  const craterRadius = 18.5;
 
   for (let y = 0; y < GRID_SIZE; y++) {
     const row = [];
@@ -76,49 +116,41 @@ function generateJezeroCraterDEM() {
       const nx = x / (GRID_SIZE - 1);
       const ny = y / (GRID_SIZE - 1);
 
-      // Uneven base terrain undulating across ancient delta bedrock
       const baseElev = 52.0 +
         Math.sin(nx * Math.PI * 3.8) * 8.5 +
         Math.cos(ny * Math.PI * 3.4) * 7.5 +
         Math.sin((nx + ny) * 10.5) * 3.2;
 
-      // Radial distance to crater center
       const dist = Math.hypot(x - cx, y - cy);
       const rNorm = dist / craterRadius;
 
       let craterEffect = 0;
-
       if (rNorm < 1.0) {
-        // Deep parabolic crater bowl
         const bowlDepth = -36.0 * (1.0 - Math.pow(rNorm, 2.0));
-        // Central uplift / rebound peak
         const centralPeak = Math.exp(-Math.pow(rNorm * 4.2, 2.0)) * 8.5;
         craterEffect = bowlDepth + centralPeak;
       } else {
-        // Outer ejecta blanket and decaying radial ramparts
         const angle = Math.atan2(y - cy, x - cx);
         const ejectaRays = Math.sin(angle * 7.0) * (5.5 / (rNorm + 0.3));
         const rampartDecay = 16.0 / Math.pow(rNorm, 1.5);
         craterEffect = rampartDecay + ejectaRays;
       }
 
-      // Elevated crater rim wall crest around rNorm ~ 0.92 to 1.15
       const rimWall = Math.exp(-Math.pow((rNorm - 1.0) / 0.16, 2.0)) * 21.0;
-
       const totalElevation = Math.max(3.0, Math.min(97.0, baseElev + craterEffect + rimWall));
       row.push(parseFloat(totalElevation.toFixed(2)));
     }
     grid.push(row);
   }
-
   return grid;
 }
 
-/**
- * "Moon - Shackleton" (Secondary lunar target preset)
- * Constraints: g = 1.62 m/s², phi = 35°, c = 0.3 kPa.
- */
 function generateMoonShackletonDEM() {
+  if (CUSTOM_PRESET_DATA.moon) {
+    const custom = normalizeCustomGridTo60x60(CUSTOM_PRESET_DATA.moon);
+    if (custom) return custom;
+  }
+
   const grid = [];
   const cx = 30;
   const cy = 30;
@@ -150,22 +182,14 @@ function generateMoonShackletonDEM() {
  * -------------------------------------------------------------
  * 2. Slope Calculation (8 Immediate Neighbors)
  * -------------------------------------------------------------
- * For each cell (x,y), calculate local slope in degrees using
- * the maximum elevation difference of its 8 immediate neighbors.
  */
 function calculateSlopeMatrix(grid) {
   if (!grid || grid.length !== GRID_SIZE) return [];
 
   const slopeMatrix = [];
   const neighborOffsets = [
-    [1, 0, 1.0],           // East
-    [-1, 0, 1.0],          // West
-    [0, 1, 1.0],           // South
-    [0, -1, 1.0],          // North
-    [1, 1, Math.SQRT2],    // South-East
-    [1, -1, Math.SQRT2],   // North-East
-    [-1, 1, Math.SQRT2],   // South-West
-    [-1, -1, Math.SQRT2]   // North-West
+    [1, 0, 1.0], [-1, 0, 1.0], [0, 1, 1.0], [0, -1, 1.0],
+    [1, 1, Math.SQRT2], [1, -1, Math.SQRT2], [-1, 1, Math.SQRT2], [-1, -1, Math.SQRT2]
   ];
 
   for (let y = 0; y < GRID_SIZE; y++) {
@@ -207,47 +231,30 @@ const GEOTECHNICAL_PRESETS = {
   "Salar de Uyuni Rim": {
     name: "Salar de Uyuni Rim",
     environment: "Terrestrial Analog",
-    constraints: {
-      g: 9.81,     // m/s² (Earth gravity)
-      phi: 32.0,   // degrees (internal friction angle)
-      c: 4.5       // kPa (salt-silt cohesion)
-    },
+    constraints: { g: 9.81, phi: 32.0, c: 4.5 },
     generator: generateSalarDeUyuniDEM
   },
   "Mars - Jezero Crater": {
     name: "Mars - Jezero Crater",
     environment: "Target Environment",
-    constraints: {
-      g: 3.72,     // m/s² (Martian surface gravity)
-      phi: 18.0,   // degrees (low-friction regolith / basaltic dust)
-      c: 0.8       // kPa (low cohesion)
-    },
+    constraints: { g: 3.72, phi: 18.0, c: 0.8 },
     generator: generateJezeroCraterDEM
   },
   "Moon - Shackleton": {
     name: "Moon - Shackleton",
     environment: "Target Environment",
-    constraints: {
-      g: 1.62,     // m/s² (Lunar gravity)
-      phi: 35.0,   // degrees (compacted jagged regolith)
-      c: 0.3       // kPa (sub-kPa cohesion)
-    },
+    constraints: { g: 1.62, phi: 35.0, c: 0.3 },
     generator: generateMoonShackletonDEM
   }
 };
 
 /**
  * -------------------------------------------------------------
- * 4. sieveFacts(presetName) - Colander 1 Workflow Engine
+ * 4. sieveFacts(presetName)
  * -------------------------------------------------------------
  */
 function sieveFacts(presetName) {
-  if (!window.AppState) {
-    console.error('[Colander Engine] AppState is not initialized.');
-    return;
-  }
-
-  console.log(`[Colander Engine] sieveFacts('${presetName}') called.`);
+  if (!window.AppState) return;
 
   let normalized = presetName || 'Salar de Uyuni Rim';
   if (normalized === 'Earth' || normalized.includes('Uyuni')) {
@@ -258,18 +265,15 @@ function sieveFacts(presetName) {
     normalized = 'Moon - Shackleton';
   }
 
-  // 1. Generate Earth Analog DEM (Salar de Uyuni Rim)
   const earthPreset = GEOTECHNICAL_PRESETS['Salar de Uyuni Rim'];
   const earthGrid = earthPreset.generator();
   const earthSlopeGrid = calculateSlopeMatrix(earthGrid);
 
-  // 2. Generate Target Environment DEM (Mars - Jezero Crater or Moon)
   const targetKey = normalized === 'Moon - Shackleton' ? 'Moon - Shackleton' : 'Mars - Jezero Crater';
   const targetPreset = GEOTECHNICAL_PRESETS[targetKey];
   const targetGrid = targetPreset.generator();
   const targetSlopeGrid = calculateSlopeMatrix(targetGrid);
 
-  // 3. Populate AppState.facts
   const facts = window.AppState.facts;
   facts.earthGrid = earthGrid;
   facts.targetGrid = targetGrid;
@@ -294,32 +298,21 @@ function sieveFacts(presetName) {
   facts.preset = normalized;
   facts.site = normalized;
 
-  console.log(`[Colander Engine] Facts sieved for '${normalized}':`, {
-    earthGrid: '60x60',
-    targetGrid: '60x60',
-    earthConstraints: facts.earthConstraints,
-    targetConstraints: facts.targetConstraints
-  });
-
-  // Automatically execute sieveActs to compute terramechanics, hazards & energy costs
   const config = window.AppState.config?.rover || facts.roverSpecs;
   const startPt = window.AppState.config?.mission?.start;
   const endPt = window.AppState.config?.mission?.end;
   sieveActs(facts, config, startPt, endPt);
 
-  // Trigger UI updates
-  if (typeof updateTargetEnvironmentLabel === 'function') {
-    updateTargetEnvironmentLabel();
+  if (typeof window.updateTargetEnvironmentLabel === 'function') {
+    window.updateTargetEnvironmentLabel();
   }
-  if (typeof updateLegendUI === 'function') {
-    updateLegendUI();
+  if (typeof window.updateLegendUI === 'function') {
+    window.updateLegendUI();
   }
-  if (typeof updateMetricsUI === 'function') {
-    updateMetricsUI();
+  if (typeof window.updateMetricsUI === 'function') {
+    window.updateMetricsUI();
   }
-  if (typeof renderAllMaps === 'function') {
-    renderAllMaps();
-  } else if (window.renderAllMaps) {
+  if (typeof window.renderAllMaps === 'function') {
     window.renderAllMaps();
   }
 
@@ -334,20 +327,8 @@ function sieveFacts(presetName) {
 
 /**
  * -------------------------------------------------------------
- * 5. sieveActs(facts, roverConfig, startPt, endPt) - Batch 9
+ * 5. sieveActs(facts, roverConfig, startPt, endPt)
  * -------------------------------------------------------------
- * For both Earth and Target grids, iterates through every cell to compute:
- * 1. Hazard Classification Matrix:
- *    isHazard = (slope > maxSlopeDeg) || (slope > phi * gripFactor)
- * 2. Energy Cost Matrix:
- *    Base = 1.0 * baseEnergyCost
- *    Incline Penalty = (slope / 15)^2
- *    Slip Penalty = Inversely proportional to cohesion (c) and gravity (g),
- *                   amplified on steep slopes.
- *    Total Cost = Base + Incline + Slip
- * 3. Reachability Flood-Fill:
- *    BFS from startPt outward, only traversing where isHazard === false
- * 4. Wires to AppState.acts and fires canvas render pipeline.
  */
 function sieveActs(facts, roverConfig, startPt, endPt) {
   if (!window.AppState) return;
@@ -372,7 +353,6 @@ function sieveActs(facts, roverConfig, startPt, endPt) {
   const earthConstraints = currentFacts.earthConstraints || { g: 9.81, phi: 32.0, c: 4.5 };
   const targetConstraints = currentFacts.targetConstraints || { g: 3.72, phi: 18.0, c: 0.8 };
 
-  // Terramechanics computation for an environment grid
   function computeTerramechanicsMatrices(grid, slopeGrid, constraints) {
     const hazardMatrix = [];
     const energyMatrix = [];
@@ -380,8 +360,6 @@ function sieveActs(facts, roverConfig, startPt, endPt) {
     const g = constraints.g || 9.81;
     const phi = constraints.phi || 30.0;
     const c = constraints.c || 2.0;
-
-    // 1. Soil friction failure angle: phi * gripFactor
     const frictionFailureLimit = phi * gripFactor;
 
     for (let y = 0; y < GRID_SIZE; y++) {
@@ -390,26 +368,15 @@ function sieveActs(facts, roverConfig, startPt, endPt) {
 
       for (let x = 0; x < GRID_SIZE; x++) {
         const slope = slopeGrid[y][x];
-
-        // 1. Hazard Classification:
-        // isHazard = true if slope > maxSlopeDeg OR slope exceeds soil friction failure limit
         const isHazard = (slope > maxSlopeDeg) || (slope > frictionFailureLimit);
         hazardRow.push(isHazard);
 
-        // 2. Energy Cost:
-        // Base cost
         const base = 1.0 * baseEnergyCost;
-
-        // Incline Penalty = (cell.slope / 15)^2
         const inclinePenalty = Math.pow(slope / 15.0, 2.0);
-
-        // Slip Penalty = Inversely proportional to cohesion (c) and gravity (g)
-        // Ratio relative to Earth reference: lower cohesion and lower gravity increase wheel slip
         const soilTerramechanicsRatio = (9.81 / Math.max(1.0, g)) * (2.8 / Math.max(0.4, c));
         const slopeSin = Math.sin(slope * (Math.PI / 180.0));
         const slipPenalty = (slopeSin * 2.2) * soilTerramechanicsRatio * (1.35 - gripFactor * 0.35);
 
-        // Total Cell Cost = Base + Incline + Slip
         const totalCellCost = parseFloat((base + inclinePenalty + Math.max(0, slipPenalty)).toFixed(3));
         energyRow.push(totalCellCost);
       }
@@ -417,67 +384,33 @@ function sieveActs(facts, roverConfig, startPt, endPt) {
       energyMatrix.push(energyRow);
     }
 
-    // 3. Reachability Flood-Fill (BFS)
     const reachabilityMatrix = computeReachabilityBFS(hazardMatrix, start);
-
-    return {
-      hazardMatrix,
-      energyMatrix,
-      reachabilityMatrix
-    };
+    return { hazardMatrix, energyMatrix, reachabilityMatrix };
   }
 
-  // Compute for Earth
   const earthActs = computeTerramechanicsMatrices(earthGrid, earthSlope, earthConstraints);
-
-  // Compute for Target
   const targetActs = computeTerramechanicsMatrices(targetGrid, targetSlope, targetConstraints);
 
-  // 4. Wire these matrices to AppState.acts
   const acts = window.AppState.acts;
   acts.earthHazards = earthActs.hazardMatrix;
   acts.targetHazards = targetActs.hazardMatrix;
-  acts.hazardMatrix = earthActs.hazardMatrix; // alias
+  acts.hazardMatrix = earthActs.hazardMatrix;
 
   acts.earthEnergy = earthActs.energyMatrix;
   acts.targetEnergy = targetActs.energyMatrix;
-  acts.energyCostMatrix = earthActs.energyMatrix; // alias
+  acts.energyCostMatrix = earthActs.energyMatrix;
 
   acts.earthReachability = earthActs.reachabilityMatrix;
   acts.targetReachability = targetActs.reachabilityMatrix;
-  acts.reachabilityMatrix = earthActs.reachabilityMatrix; // alias
+  acts.reachabilityMatrix = earthActs.reachabilityMatrix;
 
-  console.log('[Colander Engine] sieveActs: Terramechanics matrices updated in AppState.acts:', {
-    maxSlopeDeg,
-    frictionLimitEarth: `${(earthConstraints.phi * gripFactor).toFixed(1)}°`,
-    frictionLimitTarget: `${(targetConstraints.phi * gripFactor).toFixed(1)}°`,
-    earthHazards: earthActs.hazardMatrix.flat().filter(Boolean).length,
-    targetHazards: targetActs.hazardMatrix.flat().filter(Boolean).length
-  });
+  if (typeof window.updateLegendUI === 'function') window.updateLegendUI();
+  if (typeof window.updateMetricsUI === 'function') window.updateMetricsUI();
+  if (typeof window.renderAllMaps === 'function') window.renderAllMaps();
 
-  // Fire canvas render pipeline
-  if (typeof updateLegendUI === 'function') {
-    updateLegendUI();
-  }
-  if (typeof updateMetricsUI === 'function') {
-    updateMetricsUI();
-  }
-  if (typeof renderAllMaps === 'function') {
-    renderAllMaps();
-  } else if (window.renderAllMaps) {
-    window.renderAllMaps();
-  }
-
-  return {
-    earth: earthActs,
-    target: targetActs
-  };
+  return { earth: earthActs, target: targetActs };
 }
 
-/**
- * Breadth-First Search (BFS) Flood-Fill for Reachability
- * Traverses only where isHazard === false
- */
 function computeReachabilityBFS(hazardMatrix, startPt) {
   const reachable = Array.from({ length: GRID_SIZE }, () => new Uint8Array(GRID_SIZE));
   if (!hazardMatrix || !startPt || startPt.x == null || startPt.y == null) {
@@ -487,10 +420,7 @@ function computeReachabilityBFS(hazardMatrix, startPt) {
   const sx = Math.max(0, Math.min(GRID_SIZE - 1, Math.round(startPt.x)));
   const sy = Math.max(0, Math.min(GRID_SIZE - 1, Math.round(startPt.y)));
 
-  // If Start Point itself is inside a hazard, it cannot traverse
-  if (hazardMatrix[sy][sx]) {
-    return reachable;
-  }
+  if (hazardMatrix[sy][sx]) return reachable;
 
   const queue = [[sx, sy]];
   reachable[sy][sx] = 1;
@@ -515,19 +445,13 @@ function computeReachabilityBFS(hazardMatrix, startPt) {
       }
     }
   }
-
   return reachable;
 }
 
 /**
  * -------------------------------------------------------------
- * 6. A* Pathfinding Engine (Batch 10)
+ * 6. A* Pathfinding Engine
  * -------------------------------------------------------------
- * 8-directional A* search from Start (A) to End (B).
- * - Strictly cannot enter isHazard cells.
- * - Edge weight (g-cost) = physical distance (1m orthogonal, 1.414m diagonal)
- *   multiplied by the destination cell's Energy Cost.
- * - Reconstructs trajectory array [{ x, y, z }].
  */
 function findPathAStar(grid, hazardMatrix, energyMatrix, start, end) {
   if (!grid || !hazardMatrix || !energyMatrix || !start || !end) return [];
@@ -543,14 +467,8 @@ function findPathAStar(grid, hazardMatrix, energyMatrix, start, end) {
 
   const SQRT2 = Math.SQRT2;
   const dirs = [
-    [1, 0, 1.0],
-    [-1, 0, 1.0],
-    [0, 1, 1.0],
-    [0, -1, 1.0],
-    [1, 1, SQRT2],
-    [1, -1, SQRT2],
-    [-1, 1, SQRT2],
-    [-1, -1, SQRT2]
+    [1, 0, 1.0], [-1, 0, 1.0], [0, 1, 1.0], [0, -1, 1.0],
+    [1, 1, SQRT2], [1, -1, SQRT2], [-1, 1, SQRT2], [-1, -1, SQRT2]
   ];
 
   const totalCells = GRID_SIZE * GRID_SIZE;
@@ -569,11 +487,8 @@ function findPathAStar(grid, hazardMatrix, energyMatrix, start, end) {
   gScores[startIndex] = 0;
   fScores[startIndex] = heuristic(sx, sy);
 
-  // Binary Min-Heap Priority Queue for O(log N) open set operations
   class MinHeap {
-    constructor() {
-      this.heap = [];
-    }
+    constructor() { this.heap = []; }
     push(idx) {
       this.heap.push(idx);
       this.bubbleUp(this.heap.length - 1);
@@ -612,16 +527,12 @@ function findPathAStar(grid, hazardMatrix, energyMatrix, start, end) {
         if (child1N < length) {
           const child1 = this.heap[child1N];
           child1Score = fScores[child1];
-          if (child1Score < score) {
-            swap = child1N;
-          }
+          if (child1Score < score) swap = child1N;
         }
         if (child2N < length) {
           const child2 = this.heap[child2N];
           const child2Score = fScores[child2];
-          if (child2Score < (swap === null ? score : child1Score)) {
-            swap = child2N;
-          }
+          if (child2Score < (swap === null ? score : child1Score)) swap = child2N;
         }
         if (swap === null) break;
         this.heap[n] = this.heap[swap];
@@ -629,9 +540,7 @@ function findPathAStar(grid, hazardMatrix, energyMatrix, start, end) {
       }
       this.heap[n] = element;
     }
-    get length() {
-      return this.heap.length;
-    }
+    get length() { return this.heap.length; }
   }
 
   const openHeap = new MinHeap();
@@ -672,14 +581,8 @@ function findPathAStar(grid, hazardMatrix, energyMatrix, start, end) {
       const nIdx = ny * GRID_SIZE + nx;
       if (closed[nIdx]) continue;
 
-      // The pathfinder strictly cannot enter isHazard cells
-      if (hazardMatrix[ny][nx]) {
-        if (!(nx === ex && ny === ey)) {
-          continue;
-        }
-      }
+      if (hazardMatrix[ny][nx] && !(nx === ex && ny === ey)) continue;
 
-      // Edge weight (g-cost) = physical distance * destination cell's Energy Cost
       const destEnergyCost = (energyMatrix[ny] && energyMatrix[ny][nx] != null) ? energyMatrix[ny][nx] : 1.0;
       const moveCost = stepDist * destEnergyCost;
       const tentativeG = currentG + moveCost;
@@ -687,14 +590,12 @@ function findPathAStar(grid, hazardMatrix, energyMatrix, start, end) {
       if (tentativeG < gScores[nIdx]) {
         cameFrom[nIdx] = curIdx;
         gScores[nIdx] = tentativeG;
-        const f = tentativeG + heuristic(nx, ny);
-        fScores[nIdx] = f;
+        fScores[nIdx] = tentativeG + heuristic(nx, ny);
         openHeap.push(nIdx);
       }
     }
   }
 
-  // Reconstruct path array
   const targetEndIdx = reachedEnd ? endIndex : closestIndex;
   const path = [];
   let curr = targetEndIdx;
@@ -712,18 +613,9 @@ function findPathAStar(grid, hazardMatrix, energyMatrix, start, end) {
   return path;
 }
 
-/**
- * Telemetry Extraction from Path
- */
 function extractPathTelemetry(path, grid, hazardMatrix, energyMatrix, slopeMatrix) {
   if (!path || path.length < 2) {
-    return {
-      energy: 0,
-      length: 0,
-      hazardsAvoided: 0,
-      avgSlope: 0,
-      maxTilt: 0
-    };
+    return { energy: 0, length: 0, hazardsAvoided: 0, avgSlope: 0, maxTilt: 0 };
   }
 
   let totalEnergy = 0.0;
@@ -748,17 +640,13 @@ function extractPathTelemetry(path, grid, hazardMatrix, energyMatrix, slopeMatri
     const stepDist = Math.hypot(dx, dy, dz) * CELL_WORLD_METERS;
     totalLength += stepDist;
 
-    // Sum total energy along path (Edge weight in Joules, ~14.2 J/m base motor consumption)
     const cellEnergyCost = (energyMatrix && energyMatrix[curr.y]) ? energyMatrix[curr.y][curr.x] : 1.0;
-    const stepEnergy = stepDist * cellEnergyCost * 14.2;
-    totalEnergy += stepEnergy;
+    totalEnergy += stepDist * cellEnergyCost * 14.2;
 
-    // Slope telemetry
     const slope = (slopeMatrix && slopeMatrix[curr.y]) ? slopeMatrix[curr.y][curr.x] : 0;
     sumSlope += slope;
     if (slope > maxTilt) maxTilt = slope;
 
-    // Hazards avoided: count hazard cells immediately adjacent to the path
     for (let ny = Math.max(0, curr.y - 1); ny <= Math.min(GRID_SIZE - 1, curr.y + 1); ny++) {
       for (let nx = Math.max(0, curr.x - 1); nx <= Math.min(GRID_SIZE - 1, curr.x + 1); nx++) {
         if (!pathSet.has(`${nx},${ny}`) && hazardMatrix && hazardMatrix[ny] && hazardMatrix[ny][nx]) {
@@ -779,9 +667,6 @@ function extractPathTelemetry(path, grid, hazardMatrix, energyMatrix, slopeMatri
   };
 }
 
-/**
- * Calculate Reachability % from BFS matrix
- */
 function calculateReachabilityPct(reachabilityMatrix) {
   if (!reachabilityMatrix) return 0;
   let count = 0;
@@ -795,54 +680,37 @@ function calculateReachabilityPct(reachabilityMatrix) {
 
 /**
  * -------------------------------------------------------------
- * 7. sieveStats(acts) - Colander 1 Workflow Engine (Batch 10)
+ * 7. sieveStats(acts) - Full A* & Telemetry Execution
  * -------------------------------------------------------------
- * Executes full A* pathfinding & telemetry pipeline:
- * - 8-directional search for both Earth and Target maps
- * - Telemetry Extraction (Joules, Hazards Avoided, Path Length, Avg Slope, Max Tilt)
- * - Analog Similarity Score (%) and Analog Viability Verdict
- * - Updates AppState.stats, Bottom Bar, Result Drawer & Trajectory Lines
  */
 function sieveStats(acts) {
-  if (!window.AppState) {
-    console.error('[Colander Engine] AppState is not initialized.');
-    return;
-  }
+  if (!window.AppState) return;
 
-  console.log('[Colander Engine] sieveStats() executing...');
-
-  // Ensure facts and acts are populated
   const facts = window.AppState.facts;
   if (!facts.earthGrid || !facts.targetGrid) {
     sieveFacts(facts.preset || 'Salar de Uyuni Rim');
   }
 
-  let currentActs = acts || window.AppState.acts;
-  if (!currentActs || !currentActs.earthHazards || !currentActs.targetHazards) {
-    const roverConfig = window.AppState.config?.rover || facts.roverSpecs;
-    const startPt = window.AppState.config?.mission?.start;
-    const endPt = window.AppState.config?.mission?.end;
-    currentActs = sieveActs(facts, roverConfig, startPt, endPt);
-  }
-
-  // Ensure Start and End waypoints are set
   let mission = window.AppState.config.mission;
   if (!mission.start) {
-    mission.start = { x: 8, y: 8, z: facts.earthGrid[8][8] };
+    mission.start = { x: 8, y: 28, z: facts.earthGrid[28][8] };
     if (facts.missionSetup) facts.missionSetup.startPoint = mission.start;
   }
   if (!mission.end) {
-    mission.end = { x: 50, y: 50, z: facts.earthGrid[50][50] };
+    mission.end = { x: 50, y: 28, z: facts.earthGrid[28][50] };
     if (facts.missionSetup) facts.missionSetup.endPoint = mission.end;
   }
-  if (typeof updateMissionStatusHUD === 'function') {
-    updateMissionStatusHUD();
+  if (typeof window.updateMissionStatusHUD === 'function') {
+    window.updateMissionStatusHUD();
   }
+
+  const roverConfig = window.AppState.config?.rover || facts.roverSpecs;
+  sieveActs(facts, roverConfig, mission.start, mission.end);
+  const currentActs = window.AppState.acts;
 
   const start = mission.start;
   const end = mission.end;
 
-  // 1. Solve Earth A* Path
   const earthPath = findPathAStar(
     facts.earthGrid,
     currentActs.earthHazards || currentActs.hazardMatrix,
@@ -851,7 +719,6 @@ function sieveStats(acts) {
     end
   );
 
-  // 2. Solve Target A* Path
   const targetPath = findPathAStar(
     facts.targetGrid,
     currentActs.targetHazards,
@@ -860,12 +727,10 @@ function sieveStats(acts) {
     end
   );
 
-  // Save trajectory arrays to AppState.acts
   window.AppState.acts.earthPath = earthPath;
   window.AppState.acts.path = earthPath;
   window.AppState.acts.targetPath = targetPath;
 
-  // 3. Telemetry Extraction (Stats)
   const earthTelemetry = extractPathTelemetry(
     earthPath,
     facts.earthGrid,
@@ -885,8 +750,6 @@ function sieveStats(acts) {
   const earthReachPct = calculateReachabilityPct(currentActs.earthReachability || currentActs.reachabilityMatrix);
   const targetReachPct = calculateReachabilityPct(currentActs.targetReachability);
 
-  // 4. Analog Similarity Score (%)
-  // Compare Earth Acts to Target Acts based on energy variance and path length variance
   const maxEnergy = Math.max(earthTelemetry.energy, targetTelemetry.energy, 1.0);
   const energyVariance = Math.abs(earthTelemetry.energy - targetTelemetry.energy) / maxEnergy;
 
@@ -897,7 +760,6 @@ function sieveStats(acts) {
   const rawSimilarity = (1.0 - compositeVariance) * 100.0;
   const analogSimilarity = Math.max(12, Math.min(98, Math.round(rawSimilarity * 10) / 10));
 
-  // Determine Analog Viability Verdict
   let verdictTitle = '';
   let verdictClass = '';
   let verdictDesc = '';
@@ -915,7 +777,6 @@ function sieveStats(acts) {
     verdictDesc = 'Critical terrain divergence; terrestrial analog fails to reproduce target hazard distribution.';
   }
 
-  // 5. Push final numbers to AppState.stats
   window.AppState.stats = {
     energyUsed: earthTelemetry.energy,
     energyTarget: targetTelemetry.energy,
@@ -952,12 +813,10 @@ function sieveStats(acts) {
     description: verdictDesc
   };
 
-  // Refresh Bottom Bar
-  if (typeof updateMetricsUI === 'function') {
-    updateMetricsUI();
+  if (typeof window.updateMetricsUI === 'function') {
+    window.updateMetricsUI();
   }
 
-  // Update Detailed Stats Comparison Cards in Telemetry Drawer
   const isCompare = window.AppState.compareMode;
   const tEnergy = document.getElementById('t-stat-energy');
   const tSlope = document.getElementById('t-stat-avg-slope');
@@ -969,7 +828,6 @@ function sieveStats(acts) {
   if (tTilt) tTilt.textContent = isCompare ? `${earthTelemetry.maxTilt.toFixed(1)}° | ${targetTelemetry.maxTilt.toFixed(1)}°` : `${earthTelemetry.maxTilt.toFixed(1)}°`;
   if (tReach) tReach.textContent = isCompare ? `${earthReachPct}% | ${targetReachPct}%` : `${earthReachPct}%`;
 
-  // Update Automated Engineering Facts & Acts Log
   const logBox = document.getElementById('engineering-log');
   if (logBox) {
     const timestamp = new Date().toLocaleTimeString();
@@ -978,7 +836,7 @@ function sieveStats(acts) {
     const gTarget = facts.targetConstraints?.g || 3.72;
     const slipOverheadPct = Math.max(5, Math.round(((targetTelemetry.energy - earthTelemetry.energy) / Math.max(1, earthTelemetry.energy)) * 100));
 
-    logBox.textContent = `[${timestamp}] MISSION TELEMETRY RUN COMPLETED // SEQUENCE #0842\n` +
+    logBox.textContent = `[${timestamp}] MISSION TELEMETRY RUN COMPLETED // PLANETARY TERRAIN MAPPING\n` +
       `• Rover navigated ${earthTelemetry.length}m on Earth ${isCompare ? `vs ${targetTelemetry.length}m on ${targetSite}` : ''}.\n` +
       `• Avoided ${earthTelemetry.hazardsAvoided} terrestrial hazard cells (slope > ${maxSlopeDeg}° or step > 0.3m) ${isCompare ? `vs ${targetTelemetry.hazardsAvoided} avoided on ${targetSite}` : ''}.\n` +
       `• Mean gradient: ${earthTelemetry.avgSlope.toFixed(1)}° (Max Tilt: ${earthTelemetry.maxTilt.toFixed(1)}°).\n` +
@@ -987,7 +845,6 @@ function sieveStats(acts) {
       `• Analog Viability Verdict: ${verdictTitle} (${analogSimilarity}% match).`;
   }
 
-  // Update Analog Viability Verdict Gauge
   const scorePct = document.getElementById('verdict-score-pct');
   const meterFill = document.getElementById('verdict-meter-fill');
   const badge = document.getElementById('verdict-status-badge');
@@ -1001,30 +858,19 @@ function sieveStats(acts) {
   }
   if (desc) desc.textContent = verdictDesc;
 
-  // Open the Telemetry Drawer
   const drawer = document.getElementById('telemetry-summary');
   const chevron = document.getElementById('drawer-chevron');
   const runStatus = document.getElementById('telemetry-run-status');
 
-  if (drawer) {
-    drawer.classList.remove('collapsed');
-  }
+  if (drawer) drawer.classList.remove('collapsed');
   if (chevron) chevron.textContent = '▼';
   if (runStatus) runStatus.textContent = 'RUN COMPLETE';
 
-  // Redraw maps with glowing neon trajectory lines
-  if (typeof renderAllMaps === 'function') {
-    renderAllMaps();
-  } else if (window.renderAllMaps) {
+  if (typeof window.startRoverAnimation === 'function') {
+    window.startRoverAnimation();
+  } else if (typeof window.renderAllMaps === 'function') {
     window.renderAllMaps();
   }
-
-  console.log('[Colander Engine] sieveStats completed successfully:', {
-    earthPathLength: earthPath.length,
-    targetPathLength: targetPath.length,
-    similarity: `${analogSimilarity}%`,
-    verdict: verdictTitle
-  });
 
   return {
     earthPath,
@@ -1036,19 +882,9 @@ function sieveStats(acts) {
   };
 }
 
-// Wire Run Simulation button
-if (typeof document !== 'undefined') {
-  document.addEventListener('DOMContentLoaded', () => {
-    const runBtn = document.getElementById('btn-run');
-    if (runBtn) {
-      runBtn.addEventListener('click', () => {
-        sieveStats(window.AppState?.acts);
-      });
-    }
-  });
-}
-
-// Expose functions globally for execution and testing
+// Expose functions globally
+window.CUSTOM_PRESET_DATA = CUSTOM_PRESET_DATA;
+window.normalizeCustomGridTo60x60 = normalizeCustomGridTo60x60;
 window.GEOTECHNICAL_PRESETS = GEOTECHNICAL_PRESETS;
 window.generateSalarDeUyuniDEM = generateSalarDeUyuniDEM;
 window.generateJezeroCraterDEM = generateJezeroCraterDEM;
