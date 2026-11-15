@@ -1135,3 +1135,154 @@ function updateMetricsUI() {
 window.updateMetricsUI = updateMetricsUI;
 window.updateLegendUI = updateLegendUI;
 window.runSimulation = runSimulation;
+/**
+ * =============================================================
+ * FINAL UI PATCH: Full Reset, Single-Map Hover & Collapsible Legend
+ * =============================================================
+ */
+
+function resetSimulationBoard() {
+  if (typeof RoverAnimState !== 'undefined' && RoverAnimState.rafId) {
+    cancelAnimationFrame(RoverAnimState.rafId);
+    RoverAnimState.isAnimating = false;
+    RoverAnimState.rafId = null;
+  }
+
+  if (AppState.acts) {
+    AppState.acts.path = null;
+    AppState.acts.earthPath = null;
+    AppState.acts.targetPath = null;
+    AppState.acts.verdict = null;
+  }
+
+  if (AppState.config && AppState.config.mission) {
+    AppState.config.mission.start = null;
+    AppState.config.mission.end = null;
+  }
+  if (AppState.facts && AppState.facts.missionSetup) {
+    AppState.facts.missionSetup.startPoint = null;
+    AppState.facts.missionSetup.endPoint = null;
+    AppState.facts.missionSetup.selectedPointMode = null;
+  }
+
+  const btnStart = document.getElementById('btn-set-start');
+  const btnEnd = document.getElementById('btn-set-end');
+  if (btnStart) btnStart.classList.remove('active');
+  if (btnEnd) btnEnd.classList.remove('active');
+
+  if (typeof window.sieveActs === 'function') {
+    window.sieveActs(AppState.facts, AppState.config.rover, null, null);
+  }
+
+  AppState.stats = {};
+  const tEnergy = document.getElementById('t-stat-energy');
+  const tSlope = document.getElementById('t-stat-avg-slope');
+  const tTilt = document.getElementById('t-stat-max-tilt');
+  const tReach = document.getElementById('t-stat-reachability');
+  if (tEnergy) tEnergy.textContent = '-- J';
+  if (tSlope) tSlope.textContent = '--°';
+  if (tTilt) tTilt.textContent = '--°';
+  if (tReach) tReach.textContent = '--%';
+
+  const scorePct = document.getElementById('verdict-score-pct');
+  const meterFill = document.getElementById('verdict-meter-fill');
+  const badge = document.getElementById('verdict-status-badge');
+  const desc = document.getElementById('verdict-desc');
+  const logBox = document.getElementById('engineering-log');
+  if (scorePct) scorePct.textContent = '--%';
+  if (meterFill) meterFill.style.width = '0%';
+  if (badge) {
+    badge.className = 'verdict-badge verdict-pending';
+    badge.textContent = 'AWAITING RUN';
+  }
+  if (desc) desc.textContent = 'Run comparison simulation to evaluate terrestrial analog match.';
+  if (logBox) logBox.textContent = 'Click "Run Simulation" in the top bar to calculate path traversal, slip friction, and planetary analog viability.';
+
+  const drawer = document.getElementById('telemetry-summary');
+  const chevron = document.getElementById('drawer-chevron');
+  const runStatus = document.getElementById('telemetry-run-status');
+  if (drawer) drawer.classList.add('collapsed');
+  if (chevron) chevron.textContent = '▲';
+  if (runStatus) runStatus.textContent = 'READY TO RUN';
+
+  if (typeof window.updateMissionStatusHUD === 'function') window.updateMissionStatusHUD();
+  if (typeof window.updateLegendUI === 'function') window.updateLegendUI();
+  if (typeof window.updateMetricsUI === 'function') window.updateMetricsUI();
+  if (typeof window.renderAllMaps === 'function') window.renderAllMaps();
+}
+
+function lockHoverToSingleMap(canvasId, isTargetCanvas) {
+  const cvs = document.getElementById(canvasId);
+  if (!cvs) return;
+  const ctx = cvs.getContext('2d');
+  const origFillRect = ctx.fillRect.bind(ctx);
+  const origStrokeRect = ctx.strokeRect.bind(ctx);
+
+  ctx.fillRect = function(x, y, w, h) {
+    if (AppState.compareMode && ctx.lineWidth === 1.5 && ViewState.hoveredCell && Boolean(ViewState.hoveredCell.isTarget) !== isTargetCanvas) {
+      return;
+    }
+    return origFillRect(x, y, w, h);
+  };
+
+  ctx.strokeRect = function(x, y, w, h) {
+    if (AppState.compareMode && ViewState.hoveredCell && Boolean(ViewState.hoveredCell.isTarget) !== isTargetCanvas) {
+      return;
+    }
+    return origStrokeRect(x, y, w, h);
+  };
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const btnZoomReset = document.getElementById('btn-zoom-reset');
+  if (btnZoomReset) {
+    btnZoomReset.addEventListener('click', resetSimulationBoard);
+  }
+
+  document.querySelectorAll('.btn-preset').forEach(btn => {
+    btn.addEventListener('click', resetSimulationBoard);
+  });
+
+  ['map-canvas-earth', 'map-canvas-target'].forEach(id => {
+    const cvs = document.getElementById(id);
+    if (cvs) {
+      cvs.addEventListener('click', () => {
+        if (!ViewState.hasDragged && AppState.acts) {
+          AppState.acts.path = null;
+          AppState.acts.earthPath = null;
+          AppState.acts.targetPath = null;
+        }
+      }, true);
+    }
+  });
+
+  lockHoverToSingleMap('map-canvas-earth', false);
+  lockHoverToSingleMap('map-canvas-target', true);
+
+  const legendCard = document.getElementById('hud-legend-bar');
+  const controlsCard = document.querySelector('.hud-controls-card');
+  if (legendCard) {
+    legendCard.style.top = '36px';
+    const header = legendCard.querySelector('.legend-header');
+    const items = document.getElementById('legend-items-container');
+    const title = legendCard.querySelector('.legend-title');
+
+    if (header && items && title) {
+      header.style.cursor = 'pointer';
+      header.title = 'Click to collapse / expand layers legend';
+      title.textContent = '▾ ACTIVE LAYERS';
+
+      let isCollapsed = false;
+      header.addEventListener('click', () => {
+        isCollapsed = !isCollapsed;
+        items.style.display = isCollapsed ? 'none' : 'flex';
+        header.style.borderBottom = isCollapsed ? 'none' : '1px solid var(--border-color)';
+        header.style.paddingBottom = isCollapsed ? '0' : '4px';
+        title.textContent = isCollapsed ? '▸ ACTIVE LAYERS' : '▾ ACTIVE LAYERS';
+      });
+    }
+  }
+  if (controlsCard) {
+    controlsCard.style.top = '36px';
+  }
+});
